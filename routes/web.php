@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\HomeController;
+use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
@@ -9,20 +11,10 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 
-Route::get('/', function () {
-    return view('welcome');
-})->name('home');
+Route::get('/', [HomeController::class, 'index'])->name('home');
 
-Route::get('/produk', function () {
-    return view('produk.index', [
-        'products' => \App\Models\Product::where('status', 'active')->latest()->get(),
-    ]);
-})->name('products.index');
-
-Route::get('/produk/{slug}', function (string $slug) {
-    $product = \App\Models\Product::where('slug', $slug)->first();
-    return view('produk.show', compact('product', 'slug'));
-})->name('products.show');
+Route::get('/produk', [ProductController::class, 'index'])->name('products.index');
+Route::get('/produk/{slug}', [ProductController::class, 'show'])->name('products.show');
 
 /*
 |--------------------------------------------------------------------------

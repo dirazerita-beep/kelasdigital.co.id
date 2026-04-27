@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Product;
+use App\Models\UserProduct;
 use Illuminate\View\View;
 
 class ProductController extends Controller
@@ -23,12 +24,24 @@ class ProductController extends Controller
     {
         $product = Product::query()
             ->where('slug', $slug)
-            ->with(['sections.lessons'])
-            ->first();
+            ->where('status', 'active')
+            ->with([
+                'sections' => fn ($q) => $q->orderBy('order_index'),
+                'sections.lessons' => fn ($q) => $q->orderBy('order_index'),
+            ])
+            ->firstOrFail();
+
+        $hasBought = false;
+        if ($user = auth()->user()) {
+            $hasBought = UserProduct::query()
+                ->where('user_id', $user->id)
+                ->where('product_id', $product->id)
+                ->exists();
+        }
 
         return view('products.show', [
             'product' => $product,
-            'slug' => $slug,
+            'hasBought' => $hasBought,
         ]);
     }
 }

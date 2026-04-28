@@ -16,6 +16,10 @@ class Order extends Model
         'referred_by',
         'amount',
         'status',
+        'payment_method',
+        'payment_proof',
+        'manual_status',
+        'whatsapp_sent_at',
         'midtrans_order_id',
         'midtrans_token',
         'paid_at',
@@ -26,6 +30,7 @@ class Order extends Model
         return [
             'amount' => 'decimal:2',
             'paid_at' => 'datetime',
+            'whatsapp_sent_at' => 'datetime',
         ];
     }
 

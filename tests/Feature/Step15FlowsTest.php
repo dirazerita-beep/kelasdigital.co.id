@@ -6,6 +6,7 @@ use App\Mail\CommissionEarnedMail;
 use App\Mail\CourseCompletedMail;
 use App\Mail\OrderConfirmedMail;
 use App\Mail\WithdrawalProcessedMail;
+use App\Models\Commission;
 use App\Models\LessonProgress;
 use App\Models\Order;
 use App\Models\Product;
@@ -427,6 +428,48 @@ class Step15FlowsTest extends TestCase
         $this->get('/produk/kelas-baru')
             ->assertOk()
             ->assertSee('Kelas Baru');
+    }
+
+    /**
+     * Bonus: Admin commissions index menampilkan agregat & data.
+     */
+    public function test_admin_commissions_index_and_mark_paid(): void
+    {
+        $this->ensurePaymentSettings();
+
+        $product = $this->makeProduct(['price' => 100000, 'commission_rate' => 20]);
+        $a = $this->makeMember(['name' => 'A']);
+        $this->grantOwnership($a, $product);
+
+        $b = $this->makeMember(['name' => 'B']);
+        $admin = $this->makeAdmin();
+
+        $this->actingAs($b)->get('/ref/'.$a->id.'/'.$product->id);
+        $this->actingAs($b)->post('/checkout/'.$product->slug);
+        $order = Order::where('user_id', $b->id)->firstOrFail();
+        $this->actingAs($admin)->post('/admin/pesanan/'.$order->id.'/konfirmasi');
+
+        $commission = Commission::where('earner_id', $a->id)->firstOrFail();
+        $this->assertSame('pending', $commission->status);
+
+        $this->actingAs($admin)->get('/admin/komisi')
+            ->assertOk()
+            ->assertSee('Total Komisi Pending')
+            ->assertSee('Total Komisi Dibayar')
+            ->assertSee($a->name)
+            ->assertSee('Tandai Dibayar');
+
+        $this->actingAs($admin)->get('/admin/komisi?status=pending')->assertOk();
+        $this->actingAs($admin)->get('/admin/komisi?status=paid')->assertOk();
+
+        $this->actingAs($admin)->post('/admin/komisi/'.$commission->id.'/paid')
+            ->assertRedirect();
+
+        $commission->refresh();
+        $this->assertSame('paid', $commission->status);
+
+        // Member tidak boleh akses /admin/komisi.
+        $this->actingAs($b)->get('/admin/komisi')->assertForbidden();
     }
 
     /**

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\CommissionController as AdminCommissionController;
 use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Admin\MemberController as AdminMemberController;
 use App\Http\Controllers\Admin\OrderController as AdminOrderController;
@@ -139,8 +140,10 @@ Route::middleware(['auth', 'verified', 'role:admin'])
         Route::get('/member/{id}', [AdminMemberController::class, 'show'])
             ->whereNumber('id')->name('members.show');
 
-        // Komisi (placeholder kept for sidebar compatibility)
-        Route::get('/komisi', fn () => view('admin.commissions'))->name('commissions');
+        // Komisi
+        Route::get('/komisi', [AdminCommissionController::class, 'index'])->name('commissions.index');
+        Route::post('/komisi/{commission}/paid', [AdminCommissionController::class, 'markPaid'])
+            ->whereNumber('commission')->name('commissions.paid');
 
         // Pencairan
         Route::get('/pencairan', [AdminWithdrawalController::class, 'index'])->name('withdrawals.index');

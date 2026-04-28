@@ -1,0 +1,118 @@
+From ff0fb42ebfab122d61694e85504b1c6a027e14a4 Mon Sep 17 00:00:00 2001
+From: "tugas.x1" <tugas.x1@gmail.com>
+Date: Tue, 28 Apr 2026 07:42:41 +0000
+Subject: [PATCH] fix(admin): use route('admin.products') instead of
+ admin.products.index
+
+Route yang terdaftar bernama 'admin.products' (bukan 'admin.products.index'),
+sehingga halaman edit dan form produk error 'Route not defined'.
+
+- Admin/ProductController@destroy: redirect()->route('admin.products')
+- views/admin/products/edit.blade.php: tombol Kembali
+- views/admin/products/_form.blade.php: tombol Batal
+- Catatan: view('admin.products.index') di index() TIDAK diubah karena itu
+  adalah path view (resources/views/admin/products/index.blade.php), bukan
+  route name.
+
++ AdminProductEditSmokeTest: verify /admin/produk/{id}/edit dan /admin/produk/baru
+  render 200 dan hyperlink ke route('admin.products') sesuai.
+
+Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+---
+ .../Controllers/Admin/ProductController.php   |  2 +-
+ .../views/admin/products/_form.blade.php      |  2 +-
+ resources/views/admin/products/edit.blade.php |  2 +-
+ tests/Feature/AdminProductEditSmokeTest.php   | 42 +++++++++++++++++++
+ 4 files changed, 45 insertions(+), 3 deletions(-)
+ create mode 100644 tests/Feature/AdminProductEditSmokeTest.php
+
+diff --git a/app/Http/Controllers/Admin/ProductController.php b/app/Http/Controllers/Admin/ProductController.php
+index 8dc7a72..dd67a10 100644
+--- a/app/Http/Controllers/Admin/ProductController.php
++++ b/app/Http/Controllers/Admin/ProductController.php
+@@ -80,7 +80,7 @@ public function destroy(int $id): RedirectResponse
+         $product->delete();
+ 
+         return redirect()
+-            ->route('admin.products.index')
++            ->route('admin.products')
+             ->with('status', 'Produk berhasil dihapus.');
+     }
+ 
+diff --git a/resources/views/admin/products/_form.blade.php b/resources/views/admin/products/_form.blade.php
+index 575c3aa..cf2453a 100644
+--- a/resources/views/admin/products/_form.blade.php
++++ b/resources/views/admin/products/_form.blade.php
+@@ -86,7 +86,7 @@ class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-
+ </div>
+ 
+ <div class="mt-8 flex items-center justify-end gap-3">
+-    <a href="{{ route('admin.products.index') }}" class="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Batal</a>
++    <a href="{{ route('admin.products') }}" class="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Batal</a>
+     <button type="submit" class="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800">
+         {{ $isEdit ? 'Simpan Perubahan' : 'Buat Produk' }}
+     </button>
+diff --git a/resources/views/admin/products/edit.blade.php b/resources/views/admin/products/edit.blade.php
+index 6e0d042..6a55784 100644
+--- a/resources/views/admin/products/edit.blade.php
++++ b/resources/views/admin/products/edit.blade.php
+@@ -8,7 +8,7 @@
+             <h1 class="text-2xl font-bold text-gray-900">Edit Produk</h1>
+             <p class="mt-1 text-sm text-gray-600">Perbarui data produk, kelola section dan lesson.</p>
+         </div>
+-        <a href="{{ route('admin.products.index') }}" class="text-sm text-gray-600 hover:underline">&larr; Kembali</a>
++        <a href="{{ route('admin.products') }}" class="text-sm text-gray-600 hover:underline">&larr; Kembali</a>
+     </header>
+ 
+     @if (session('status'))
+diff --git a/tests/Feature/AdminProductEditSmokeTest.php b/tests/Feature/AdminProductEditSmokeTest.php
+new file mode 100644
+index 0000000..6c95add
+--- /dev/null
++++ b/tests/Feature/AdminProductEditSmokeTest.php
+@@ -0,0 +1,42 @@
++<?php
++
++namespace Tests\Feature;
++
++use App\Models\Product;
++use App\Models\User;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Tests\TestCase;
++
++class AdminProductEditSmokeTest extends TestCase
++{
++    use RefreshDatabase;
++
++    public function test_admin_product_edit_renders_without_route_errors(): void
++    {
++        $admin = User::factory()->create([
++            'role' => 'admin',
++            'email_verified_at' => now(),
++        ]);
++
++        $product = Product::query()->create([
++            'title' => 'Produk Test',
++            'slug' => 'produk-test',
++            'description' => 'desc',
++            'price' => 100000,
++            'commission_rate' => 10,
++            'type' => 'course',
++            'is_active' => true,
++        ]);
++
++        $this->actingAs($admin)
++            ->get('/admin/produk/'.$product->id.'/edit')
++            ->assertOk()
++            ->assertSee('Edit Produk')
++            ->assertSee(route('admin.products'), false);
++
++        $this->actingAs($admin)
++            ->get('/admin/produk/baru')
++            ->assertOk()
++            ->assertSee(route('admin.products'), false);
++    }
++}
+-- 
+2.34.1
+

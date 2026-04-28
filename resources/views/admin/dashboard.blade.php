@@ -27,7 +27,9 @@
             <h2 class="text-base font-semibold text-gray-900">Pendapatan 30 Hari Terakhir</h2>
             <span class="text-xs text-gray-500">Berdasarkan tanggal pembayaran</span>
         </div>
-        <canvas id="revenueChart" height="80"></canvas>
+        <div style="height: 300px; position: relative;">
+            <canvas id="revenueChart"></canvas>
+        </div>
     </div>
 
     <div class="mt-6 rounded-lg bg-white border border-gray-200">

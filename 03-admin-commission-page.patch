@@ -1,0 +1,324 @@
+From 1b42fdcb43f5a40a24c27e2cdedff19b4c54d4b4 Mon Sep 17 00:00:00 2001
+From: "tugas.x1" <tugas.x1@gmail.com>
+Date: Tue, 28 Apr 2026 07:20:44 +0000
+Subject: [PATCH] feat(admin): commission management page
+
+- Buat Admin\CommissionController dengan index() + markPaid()
+- View admin.commissions.index extends layouts.admin:
+  * 2 kartu statistik (Total Pending kuning, Total Paid hijau)
+  * Filter tab Semua / Pending / Paid
+  * Tabel: tanggal, earner, email, produk, jumlah, level, status badge
+  * Tombol Tandai Dibayar per baris (hanya jika status pending)
+  * Pagination 20 per halaman
+- Update routes: GET /admin/komisi (index) + POST /admin/komisi/{commission}/paid
+- Update sidebar admin link ke admin.commissions.index
+- Hapus placeholder admin/commissions.blade.php
+- Tambah feature test admin_commissions_index_and_mark_paid (37 passed)
+
+Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+---
+ .../Admin/CommissionController.php            |  55 +++++++++
+ resources/views/admin/commissions.blade.php   |  11 --
+ .../views/admin/commissions/index.blade.php   | 109 ++++++++++++++++++
+ resources/views/layouts/admin.blade.php       |   2 +-
+ routes/web.php                                |   7 +-
+ tests/Feature/Step15FlowsTest.php             |  43 +++++++
+ 6 files changed, 213 insertions(+), 14 deletions(-)
+ create mode 100644 app/Http/Controllers/Admin/CommissionController.php
+ delete mode 100644 resources/views/admin/commissions.blade.php
+ create mode 100644 resources/views/admin/commissions/index.blade.php
+
+diff --git a/app/Http/Controllers/Admin/CommissionController.php b/app/Http/Controllers/Admin/CommissionController.php
+new file mode 100644
+index 0000000..c535993
+--- /dev/null
++++ b/app/Http/Controllers/Admin/CommissionController.php
+@@ -0,0 +1,55 @@
++<?php
++
++namespace App\Http\Controllers\Admin;
++
++use App\Http\Controllers\Controller;
++use App\Models\Commission;
++use Illuminate\Http\RedirectResponse;
++use Illuminate\Http\Request;
++use Illuminate\View\View;
++
++class CommissionController extends Controller
++{
++    public function index(Request $request): View
++    {
++        $status = $request->query('status');
++
++        $query = Commission::query()
++            ->with(['earner:id,name,email', 'order.product:id,title,slug'])
++            ->latest();
++
++        if (in_array($status, ['pending', 'paid'], true)) {
++            $query->where('status', $status);
++        }
++
++        $commissions = $query->paginate(20)->withQueryString();
++
++        $totalPending = (float) Commission::where('status', 'pending')->sum('amount');
++        $totalPaid = (float) Commission::where('status', 'paid')->sum('amount');
++
++        $counts = [
++            'all' => Commission::count(),
++            'pending' => Commission::where('status', 'pending')->count(),
++            'paid' => Commission::where('status', 'paid')->count(),
++        ];
++
++        return view('admin.commissions.index', [
++            'commissions' => $commissions,
++            'totalPending' => $totalPending,
++            'totalPaid' => $totalPaid,
++            'counts' => $counts,
++            'status' => $status,
++        ]);
++    }
++
++    public function markPaid(Commission $commission): RedirectResponse
++    {
++        if ($commission->status !== 'pending') {
++            return back()->with('error', 'Komisi sudah ditandai sebelumnya.');
++        }
++
++        $commission->update(['status' => 'paid']);
++
++        return back()->with('status', 'Komisi ditandai sudah dibayar.');
++    }
++}
+diff --git a/resources/views/admin/commissions.blade.php b/resources/views/admin/commissions.blade.php
+deleted file mode 100644
+index 5593673..0000000
+--- a/resources/views/admin/commissions.blade.php
++++ /dev/null
+@@ -1,11 +0,0 @@
+-@extends('layouts.admin')
+-
+-@section('title', 'Komisi')
+-
+-@section('content')
+-    <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
+-        <h2 class="text-lg font-semibold text-gray-900">Komisi</h2>
+-        <p class="mt-2 text-sm text-gray-500">Daftar komisi referral per order, status pembayaran, dan agregat earner akan tampil di sini.</p>
+-        <p class="mt-2 text-xs text-gray-400">(Placeholder — <code>Admin\CommissionController</code>.)</p>
+-    </div>
+-@endsection
+diff --git a/resources/views/admin/commissions/index.blade.php b/resources/views/admin/commissions/index.blade.php
+new file mode 100644
+index 0000000..e8bfd4f
+--- /dev/null
++++ b/resources/views/admin/commissions/index.blade.php
+@@ -0,0 +1,109 @@
++@extends('layouts.admin')
++
++@section('title', 'Komisi')
++
++@section('content')
++    <header class="mb-6">
++        <h1 class="text-2xl font-bold text-gray-900">Komisi Afiliasi</h1>
++        <p class="mt-1 text-sm text-gray-600">Daftar komisi referral per order, status pembayaran, dan total agregat.</p>
++    </header>
++
++    @if (session('status'))
++        <div class="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">{{ session('status') }}</div>
++    @endif
++    @if (session('error'))
++        <div class="mb-4 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">{{ session('error') }}</div>
++    @endif
++
++    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 mb-6">
++        <div class="rounded-lg border border-yellow-200 bg-yellow-50 p-5">
++            <div class="text-xs font-semibold uppercase tracking-wide text-yellow-700">Total Komisi Pending</div>
++            <div class="mt-2 text-2xl font-bold text-yellow-900">{{ formatRupiah($totalPending) }}</div>
++        </div>
++        <div class="rounded-lg border border-green-200 bg-green-50 p-5">
++            <div class="text-xs font-semibold uppercase tracking-wide text-green-700">Total Komisi Dibayar</div>
++            <div class="mt-2 text-2xl font-bold text-green-900">{{ formatRupiah($totalPaid) }}</div>
++        </div>
++    </div>
++
++    @php
++        $tabs = [
++            null => ['Semua', $counts['all']],
++            'pending' => ['Pending', $counts['pending']],
++            'paid' => ['Paid', $counts['paid']],
++        ];
++    @endphp
++    <div class="mb-4 flex gap-2 border-b border-gray-200">
++        @foreach ($tabs as $key => [$label, $count])
++            <a href="{{ route('admin.commissions.index', $key ? ['status' => $key] : []) }}"
++               class="px-4 py-2 text-sm font-medium border-b-2 -mb-px {{ ($status ?? null) === $key ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-600 hover:text-gray-900' }}">
++                {{ $label }}
++                <span class="ml-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{{ $count }}</span>
++            </a>
++        @endforeach
++    </div>
++
++    @if ($commissions->total() === 0)
++        <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-gray-500">
++            Belum ada data komisi untuk filter ini.
++        </div>
++    @else
++        <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
++            <table class="min-w-full divide-y divide-gray-200 text-sm">
++                <thead class="bg-gray-50">
++                    <tr class="text-left text-xs uppercase tracking-wide text-gray-500">
++                        <th class="px-4 py-3">Tanggal</th>
++                        <th class="px-4 py-3">Earner</th>
++                        <th class="px-4 py-3">Email</th>
++                        <th class="px-4 py-3">Produk</th>
++                        <th class="px-4 py-3">Jumlah</th>
++                        <th class="px-4 py-3">Level</th>
++                        <th class="px-4 py-3">Status</th>
++                        <th class="px-4 py-3 text-right">Aksi</th>
++                    </tr>
++                </thead>
++                <tbody class="divide-y divide-gray-100">
++                    @foreach ($commissions as $c)
++                        <tr>
++                            <td class="px-4 py-3 text-xs text-gray-600">{{ $c->created_at->format('d M Y H:i') }}</td>
++                            <td class="px-4 py-3 font-medium">{{ $c->earner?->name ?? '-' }}</td>
++                            <td class="px-4 py-3 text-xs text-gray-500">{{ $c->earner?->email ?? '-' }}</td>
++                            <td class="px-4 py-3">{{ $c->order?->product?->title ?? '-' }}</td>
++                            <td class="px-4 py-3 font-semibold">{{ formatRupiah($c->amount) }}</td>
++                            <td class="px-4 py-3">
++                                <span class="inline-flex rounded-full bg-blue-100 text-blue-800 text-xs font-semibold px-2 py-0.5">
++                                    L{{ $c->level }}
++                                </span>
++                            </td>
++                            <td class="px-4 py-3">
++                                @if ($c->status === 'paid')
++                                    <span class="inline-flex rounded-full bg-green-100 text-green-800 text-xs font-semibold px-2 py-0.5">Dibayar</span>
++                                @else
++                                    <span class="inline-flex rounded-full bg-yellow-100 text-yellow-800 text-xs font-semibold px-2 py-0.5">Pending</span>
++                                @endif
++                            </td>
++                            <td class="px-4 py-3 text-right">
++                                @if ($c->status === 'pending')
++                                    <form method="POST" action="{{ route('admin.commissions.paid', $c->id) }}"
++                                          onsubmit="return confirm('Tandai komisi ini sebagai sudah dibayar?');">
++                                        @csrf
++                                        <button type="submit"
++                                                class="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700">
++                                            Tandai Dibayar
++                                        </button>
++                                    </form>
++                                @else
++                                    <span class="text-xs text-gray-400">—</span>
++                                @endif
++                            </td>
++                        </tr>
++                    @endforeach
++                </tbody>
++            </table>
++        </div>
++
++        <div class="mt-4">
++            {{ $commissions->links() }}
++        </div>
++    @endif
++@endsection
+diff --git a/resources/views/layouts/admin.blade.php b/resources/views/layouts/admin.blade.php
+index 5d5fa98..ebaa293 100644
+--- a/resources/views/layouts/admin.blade.php
++++ b/resources/views/layouts/admin.blade.php
+@@ -48,7 +48,7 @@ class="fixed inset-y-0 left-0 z-40 w-64 transform bg-gray-900 text-gray-100 tran
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9h6m-6 4h6"/></svg>
+                     Pesanan
+                 </a>
+-                <a href="{{ route('admin.commissions') }}" class="{{ $adminLink('admin.commissions', '') }}">
++                <a href="{{ route('admin.commissions.index') }}" class="{{ $adminLink('admin.commissions.*', '') }}">
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V6m0 12v-2m9-4a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                     Komisi
+                 </a>
+diff --git a/routes/web.php b/routes/web.php
+index c6bd9e2..bed6724 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use App\Http\Controllers\Admin\CommissionController as AdminCommissionController;
+ use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
+ use App\Http\Controllers\Admin\MemberController as AdminMemberController;
+ use App\Http\Controllers\Admin\OrderController as AdminOrderController;
+@@ -139,8 +140,10 @@
+         Route::get('/member/{id}', [AdminMemberController::class, 'show'])
+             ->whereNumber('id')->name('members.show');
+ 
+-        // Komisi (placeholder kept for sidebar compatibility)
+-        Route::get('/komisi', fn () => view('admin.commissions'))->name('commissions');
++        // Komisi
++        Route::get('/komisi', [AdminCommissionController::class, 'index'])->name('commissions.index');
++        Route::post('/komisi/{commission}/paid', [AdminCommissionController::class, 'markPaid'])
++            ->whereNumber('commission')->name('commissions.paid');
+ 
+         // Pencairan
+         Route::get('/pencairan', [AdminWithdrawalController::class, 'index'])->name('withdrawals.index');
+diff --git a/tests/Feature/Step15FlowsTest.php b/tests/Feature/Step15FlowsTest.php
+index 8f334f4..450ba36 100644
+--- a/tests/Feature/Step15FlowsTest.php
++++ b/tests/Feature/Step15FlowsTest.php
+@@ -6,6 +6,7 @@
+ use App\Mail\CourseCompletedMail;
+ use App\Mail\OrderConfirmedMail;
+ use App\Mail\WithdrawalProcessedMail;
++use App\Models\Commission;
+ use App\Models\LessonProgress;
+ use App\Models\Order;
+ use App\Models\Product;
+@@ -429,6 +430,48 @@ public function test_scenario_10_admin_create_product_with_thumbnail(): void
+             ->assertSee('Kelas Baru');
+     }
+ 
++    /**
++     * Bonus: Admin commissions index menampilkan agregat & data.
++     */
++    public function test_admin_commissions_index_and_mark_paid(): void
++    {
++        $this->ensurePaymentSettings();
++
++        $product = $this->makeProduct(['price' => 100000, 'commission_rate' => 20]);
++        $a = $this->makeMember(['name' => 'A']);
++        $this->grantOwnership($a, $product);
++
++        $b = $this->makeMember(['name' => 'B']);
++        $admin = $this->makeAdmin();
++
++        $this->actingAs($b)->get('/ref/'.$a->id.'/'.$product->id);
++        $this->actingAs($b)->post('/checkout/'.$product->slug);
++        $order = Order::where('user_id', $b->id)->firstOrFail();
++        $this->actingAs($admin)->post('/admin/pesanan/'.$order->id.'/konfirmasi');
++
++        $commission = Commission::where('earner_id', $a->id)->firstOrFail();
++        $this->assertSame('pending', $commission->status);
++
++        $this->actingAs($admin)->get('/admin/komisi')
++            ->assertOk()
++            ->assertSee('Total Komisi Pending')
++            ->assertSee('Total Komisi Dibayar')
++            ->assertSee($a->name)
++            ->assertSee('Tandai Dibayar');
++
++        $this->actingAs($admin)->get('/admin/komisi?status=pending')->assertOk();
++        $this->actingAs($admin)->get('/admin/komisi?status=paid')->assertOk();
++
++        $this->actingAs($admin)->post('/admin/komisi/'.$commission->id.'/paid')
++            ->assertRedirect();
++
++        $commission->refresh();
++        $this->assertSame('paid', $commission->status);
++
++        // Member tidak boleh akses /admin/komisi.
++        $this->actingAs($b)->get('/admin/komisi')->assertForbidden();
++    }
++
+     /**
+      * Skenario 10b: Validasi thumbnail tipe dan ukuran via StoreProductRequest.
+      */
+-- 
+2.34.1
+

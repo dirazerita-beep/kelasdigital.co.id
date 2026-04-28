@@ -8,7 +8,7 @@
             <h1 class="text-2xl font-bold text-gray-900">Edit Produk</h1>
             <p class="mt-1 text-sm text-gray-600">Perbarui data produk, kelola section dan lesson.</p>
         </div>
-        <a href="{{ route('admin.products.index') }}" class="text-sm text-gray-600 hover:underline">&larr; Kembali</a>
+        <a href="{{ route('admin.products') }}" class="text-sm text-gray-600 hover:underline">&larr; Kembali</a>
     </header>
 
     @if (session('status'))

@@ -86,7 +86,7 @@
 </div>
 
 <div class="mt-8 flex items-center justify-end gap-3">
-    <a href="{{ route('admin.products.index') }}" class="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Batal</a>
+    <a href="{{ route('admin.products') }}" class="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Batal</a>
     <button type="submit" class="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800">
         {{ $isEdit ? 'Simpan Perubahan' : 'Buat Produk' }}
     </button>

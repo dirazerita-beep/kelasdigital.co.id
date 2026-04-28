@@ -21,7 +21,7 @@ class ProductController extends Controller
     {
         $products = Product::query()->latest()->paginate(20);
 
-        return view('admin.products.index', ['products' => $products]);
+        return view('admin.products', ['products' => $products]);
     }
 
     public function create(): View
@@ -80,7 +80,7 @@ class ProductController extends Controller
         $product->delete();
 
         return redirect()
-            ->route('admin.products.index')
+            ->route('admin.products')
             ->with('status', 'Produk berhasil dihapus.');
     }
 

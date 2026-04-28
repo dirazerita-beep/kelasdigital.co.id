@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\Admin\SettingController as AdminSettingController;
+use App\Http\Controllers\AffiliateController;
+use App\Http\Controllers\CertificateController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DownloadController;
@@ -13,6 +15,7 @@ use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReferralController;
+use App\Http\Controllers\WithdrawalController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -43,8 +46,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     Route::get('/produk-saya', [MemberProductController::class, 'index'])->name('member.products');
-    Route::get('/member/afiliasi', fn () => view('member.affiliate'))->name('member.affiliate');
-    Route::get('/member/saldo', fn () => view('member.balance'))->name('member.balance');
+
+    Route::get('/afiliasi', [AffiliateController::class, 'dashboard'])->name('member.affiliate');
+
+    Route::get('/saldo', [WithdrawalController::class, 'index'])->name('member.balance');
+    Route::post('/saldo/ajukan', [WithdrawalController::class, 'store'])->name('member.balance.store');
+
+    Route::get('/sertifikat/{product_id}', [CertificateController::class, 'generate'])
+        ->whereNumber('product_id')
+        ->name('certificate.generate');
 
     Route::get('/pesanan-saya', [MemberOrderController::class, 'index'])->name('member.orders');
 

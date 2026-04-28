@@ -1,0 +1,2313 @@
+From d976f4569408018bf22940c7a80bb220b59ba15e Mon Sep 17 00:00:00 2001
+From: tugadane <tugas.x1@gmail.com>
+Date: Tue, 28 Apr 2026 03:55:09 +0000
+Subject: [PATCH 1/2] feat(step11+12): email notifications + complete admin
+ panel
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Step 11 — Email notifications:
+- Add 4 Mailables (OrderConfirmedMail, CommissionEarnedMail, CourseCompletedMail, WithdrawalProcessedMail) with markdown templates
+- Hook OrderConfirmedMail into PaymentController@notification and Admin\\OrderController@konfirmasi after status=paid
+- Hook CommissionEarnedMail into CommissionService::calculate after each commission insert
+- Hook CourseCompletedMail into LearningController@markComplete on first 100% completion
+- Hook WithdrawalProcessedMail into Admin\\WithdrawalController@update after approve/reject
+- Schedule queue:work --stop-when-empty every minute via routes/console.php
+- Add MAIL_ENCRYPTION + sensible MAIL_* defaults to .env.example
+
+Step 12 — Admin panel:
+- Admin\\DashboardController with 4 KPI cards (members, monthly revenue, monthly commission, active products), 30-day Chart.js line, 10 latest orders
+- Admin\\ProductController with full CRUD, section/lesson management, SortableJS drag-drop reorder, JS slug auto-generate, thumbnail upload (jpeg/png/webp ≤2MB) renamed via Str::uuid() to storage/public/thumbnails
+- Admin\\MemberController index + show (profile, referrer, downline, purchases, commissions)
+- Admin\\WithdrawalController with approve/reject + admin_note + balance debit + email queue
+- Admin\\ReportController with month/year filter and per-product totals row
+- Sidebar updated to use new route names + add Laporan link
+---
+ .env.example                                  |   7 +-
+ .../Controllers/Admin/DashboardController.php |  63 +++++
+ .../Controllers/Admin/MemberController.php    |  53 ++++
+ .../Controllers/Admin/OrderController.php     |   9 +-
+ .../Controllers/Admin/ProductController.php   | 254 ++++++++++++++++++
+ .../Controllers/Admin/ReportController.php    |  71 +++++
+ .../Admin/WithdrawalController.php            |  89 ++++++
+ app/Http/Controllers/LearningController.php   |  15 +-
+ app/Http/Controllers/PaymentController.php    |   9 +-
+ app/Mail/CommissionEarnedMail.php             |  55 ++++
+ app/Mail/CourseCompletedMail.php              |  54 ++++
+ app/Mail/OrderConfirmedMail.php               |  53 ++++
+ app/Mail/WithdrawalProcessedMail.php          |  50 ++++
+ app/Services/CommissionService.php            |  20 +-
+ resources/views/admin/dashboard.blade.php     | 110 +++++++-
+ resources/views/admin/members.blade.php       |  11 -
+ resources/views/admin/members/index.blade.php |  49 ++++
+ resources/views/admin/members/show.blade.php  | 126 +++++++++
+ resources/views/admin/products.blade.php      |  11 -
+ .../views/admin/products/_form.blade.php      | 112 ++++++++
+ .../admin/products/_lesson_fields.blade.php   |  36 +++
+ .../views/admin/products/create.blade.php     |  15 ++
+ resources/views/admin/products/edit.blade.php | 167 ++++++++++++
+ .../views/admin/products/index.blade.php      |  77 ++++++
+ resources/views/admin/reports.blade.php       |  70 +++++
+ resources/views/admin/withdrawals.blade.php   | 111 +++++++-
+ .../views/emails/commission-earned.blade.php  |  21 ++
+ .../views/emails/course-completed.blade.php   |  18 ++
+ .../views/emails/order-confirmed.blade.php    |  20 ++
+ .../emails/withdrawal-processed.blade.php     |  29 ++
+ resources/views/layouts/admin.blade.php       |  10 +-
+ routes/console.php                            |   3 +
+ routes/web.php                                |  58 +++-
+ 33 files changed, 1804 insertions(+), 52 deletions(-)
+ create mode 100644 app/Http/Controllers/Admin/DashboardController.php
+ create mode 100644 app/Http/Controllers/Admin/MemberController.php
+ create mode 100644 app/Http/Controllers/Admin/ProductController.php
+ create mode 100644 app/Http/Controllers/Admin/ReportController.php
+ create mode 100644 app/Http/Controllers/Admin/WithdrawalController.php
+ create mode 100644 app/Mail/CommissionEarnedMail.php
+ create mode 100644 app/Mail/CourseCompletedMail.php
+ create mode 100644 app/Mail/OrderConfirmedMail.php
+ create mode 100644 app/Mail/WithdrawalProcessedMail.php
+ delete mode 100644 resources/views/admin/members.blade.php
+ create mode 100644 resources/views/admin/members/index.blade.php
+ create mode 100644 resources/views/admin/members/show.blade.php
+ delete mode 100644 resources/views/admin/products.blade.php
+ create mode 100644 resources/views/admin/products/_form.blade.php
+ create mode 100644 resources/views/admin/products/_lesson_fields.blade.php
+ create mode 100644 resources/views/admin/products/create.blade.php
+ create mode 100644 resources/views/admin/products/edit.blade.php
+ create mode 100644 resources/views/admin/products/index.blade.php
+ create mode 100644 resources/views/admin/reports.blade.php
+ create mode 100644 resources/views/emails/commission-earned.blade.php
+ create mode 100644 resources/views/emails/course-completed.blade.php
+ create mode 100644 resources/views/emails/order-confirmed.blade.php
+ create mode 100644 resources/views/emails/withdrawal-processed.blade.php
+
+diff --git a/.env.example b/.env.example
+index 550e321..95b5f79 100644
+--- a/.env.example
++++ b/.env.example
+@@ -49,13 +49,14 @@ REDIS_HOST=127.0.0.1
+ REDIS_PASSWORD=null
+ REDIS_PORT=6379
+ 
+-MAIL_MAILER=log
++MAIL_MAILER=smtp
+ MAIL_SCHEME=null
+-MAIL_HOST=127.0.0.1
++MAIL_HOST=smtp.mailtrap.io
+ MAIL_PORT=2525
+ MAIL_USERNAME=null
+ MAIL_PASSWORD=null
+-MAIL_FROM_ADDRESS="hello@example.com"
++MAIL_ENCRYPTION=tls
++MAIL_FROM_ADDRESS="hello@kelasdigital.co.id"
+ MAIL_FROM_NAME="${APP_NAME}"
+ 
+ AWS_ACCESS_KEY_ID=
+diff --git a/app/Http/Controllers/Admin/DashboardController.php b/app/Http/Controllers/Admin/DashboardController.php
+new file mode 100644
+index 0000000..fd23b37
+--- /dev/null
++++ b/app/Http/Controllers/Admin/DashboardController.php
+@@ -0,0 +1,63 @@
++<?php
++
++namespace App\Http\Controllers\Admin;
++
++use App\Http\Controllers\Controller;
++use App\Models\Commission;
++use App\Models\Order;
++use App\Models\Product;
++use App\Models\User;
++use Illuminate\View\View;
++
++class DashboardController extends Controller
++{
++    public function index(): View
++    {
++        $now = now();
++        $startOfMonth = $now->copy()->startOfMonth();
++
++        $totalMembers = User::where('role', 'member')->count();
++
++        $monthlyRevenue = (float) Order::where('status', 'paid')
++            ->whereBetween('paid_at', [$startOfMonth, $now])
++            ->sum('amount');
++
++        $monthlyCommission = (float) Commission::whereBetween('created_at', [$startOfMonth, $now])
++            ->sum('amount');
++
++        $activeProducts = Product::where('status', 'active')->count();
++
++        // Last 30 days revenue line chart data
++        $start = $now->copy()->subDays(29)->startOfDay();
++        $rows = Order::query()
++            ->where('status', 'paid')
++            ->whereBetween('paid_at', [$start, $now])
++            ->selectRaw('DATE(paid_at) as d, SUM(amount) as total')
++            ->groupBy('d')
++            ->pluck('total', 'd');
++
++        $labels = [];
++        $values = [];
++        for ($i = 0; $i < 30; $i++) {
++            $day = $start->copy()->addDays($i);
++            $key = $day->format('Y-m-d');
++            $labels[] = $day->format('d M');
++            $values[] = (float) ($rows[$key] ?? 0);
++        }
++
++        $recentOrders = Order::with(['user', 'product'])
++            ->latest()
++            ->take(10)
++            ->get();
++
++        return view('admin.dashboard', [
++            'totalMembers' => $totalMembers,
++            'monthlyRevenue' => $monthlyRevenue,
++            'monthlyCommission' => $monthlyCommission,
++            'activeProducts' => $activeProducts,
++            'chartLabels' => $labels,
++            'chartValues' => $values,
++            'recentOrders' => $recentOrders,
++        ]);
++    }
++}
+diff --git a/app/Http/Controllers/Admin/MemberController.php b/app/Http/Controllers/Admin/MemberController.php
+new file mode 100644
+index 0000000..9006df4
+--- /dev/null
++++ b/app/Http/Controllers/Admin/MemberController.php
+@@ -0,0 +1,53 @@
++<?php
++
++namespace App\Http\Controllers\Admin;
++
++use App\Http\Controllers\Controller;
++use App\Models\Commission;
++use App\Models\Order;
++use App\Models\User;
++use App\Models\UserProduct;
++use Illuminate\View\View;
++
++class MemberController extends Controller
++{
++    public function index(): View
++    {
++        $members = User::query()
++            ->where('role', 'member')
++            ->with('referrer:id,name')
++            ->withCount(['products as products_count'])
++            ->latest()
++            ->paginate(20);
++
++        return view('admin.members.index', ['members' => $members]);
++    }
++
++    public function show(int $id): View
++    {
++        $member = User::with(['referrer:id,name,email', 'referrals:id,name,email,referrer_id,created_at'])->findOrFail($id);
++
++        $orders = Order::where('user_id', $member->id)
++            ->with('product:id,title')
++            ->latest()
++            ->take(50)
++            ->get();
++
++        $commissions = Commission::where('earner_id', $member->id)
++            ->with('order.product:id,title')
++            ->latest()
++            ->take(50)
++            ->get();
++
++        $purchasedProducts = UserProduct::where('user_id', $member->id)
++            ->with('product:id,title,slug')
++            ->get();
++
++        return view('admin.members.show', [
++            'member' => $member,
++            'orders' => $orders,
++            'commissions' => $commissions,
++            'purchasedProducts' => $purchasedProducts,
++        ]);
++    }
++}
+diff --git a/app/Http/Controllers/Admin/OrderController.php b/app/Http/Controllers/Admin/OrderController.php
+index 1b38e8b..95f1233 100644
+--- a/app/Http/Controllers/Admin/OrderController.php
++++ b/app/Http/Controllers/Admin/OrderController.php
+@@ -3,12 +3,14 @@
+ namespace App\Http\Controllers\Admin;
+ 
+ use App\Http\Controllers\Controller;
++use App\Mail\OrderConfirmedMail;
+ use App\Models\Order;
+ use App\Models\UserProduct;
+ use App\Services\CommissionService;
+ use Illuminate\Http\RedirectResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Mail;
+ use Illuminate\View\View;
+ 
+ class OrderController extends Controller
+@@ -61,7 +63,12 @@ public function konfirmasi(int $id, CommissionService $commissions): RedirectRes
+             );
+         });
+ 
+-        $commissions->calculate($order->fresh(['product', 'user']));
++        $fresh = $order->fresh(['product', 'user']);
++        $commissions->calculate($fresh);
++
++        if ($fresh->user?->email) {
++            Mail::to($fresh->user->email)->queue(new OrderConfirmedMail($fresh));
++        }
+ 
+         return back()->with('status', 'Pembayaran dikonfirmasi & akses produk diaktifkan.');
+     }
+diff --git a/app/Http/Controllers/Admin/ProductController.php b/app/Http/Controllers/Admin/ProductController.php
+new file mode 100644
+index 0000000..034db53
+--- /dev/null
++++ b/app/Http/Controllers/Admin/ProductController.php
+@@ -0,0 +1,254 @@
++<?php
++
++namespace App\Http\Controllers\Admin;
++
++use App\Http\Controllers\Controller;
++use App\Models\Product;
++use App\Models\ProductLesson;
++use App\Models\ProductSection;
++use Illuminate\Http\JsonResponse;
++use Illuminate\Http\RedirectResponse;
++use Illuminate\Http\Request;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Storage;
++use Illuminate\Support\Str;
++use Illuminate\View\View;
++
++class ProductController extends Controller
++{
++    public function index(): View
++    {
++        $products = Product::query()->latest()->paginate(20);
++
++        return view('admin.products.index', ['products' => $products]);
++    }
++
++    public function create(): View
++    {
++        return view('admin.products.create');
++    }
++
++    public function store(Request $request): RedirectResponse
++    {
++        $data = $this->validateProduct($request);
++
++        $data['thumbnail'] = $this->handleThumbnail($request);
++
++        $product = Product::create($data);
++
++        return redirect()
++            ->route('admin.products.edit', $product->id)
++            ->with('status', 'Produk berhasil dibuat.');
++    }
++
++    public function edit(int $id): View
++    {
++        $product = Product::with(['sections.lessons'])->findOrFail($id);
++
++        return view('admin.products.edit', ['product' => $product]);
++    }
++
++    public function update(Request $request, int $id): RedirectResponse
++    {
++        $product = Product::findOrFail($id);
++
++        $data = $this->validateProduct($request, $id);
++
++        if ($request->hasFile('thumbnail')) {
++            if ($product->thumbnail) {
++                Storage::disk('public')->delete($product->thumbnail);
++            }
++            $data['thumbnail'] = $this->handleThumbnail($request);
++        }
++
++        $product->update($data);
++
++        return redirect()
++            ->route('admin.products.edit', $product->id)
++            ->with('status', 'Produk berhasil diperbarui.');
++    }
++
++    public function destroy(int $id): RedirectResponse
++    {
++        $product = Product::findOrFail($id);
++
++        if ($product->thumbnail) {
++            Storage::disk('public')->delete($product->thumbnail);
++        }
++
++        $product->delete();
++
++        return redirect()
++            ->route('admin.products.index')
++            ->with('status', 'Produk berhasil dihapus.');
++    }
++
++    /**
++     * @return array<string, mixed>
++     */
++    private function validateProduct(Request $request, ?int $ignoreId = null): array
++    {
++        return $request->validate([
++            'title' => ['required', 'string', 'max:200'],
++            'slug' => ['required', 'string', 'max:200', 'regex:/^[a-z0-9-]+$/', 'unique:products,slug'.($ignoreId ? ','.$ignoreId : '')],
++            'description' => ['required', 'string'],
++            'price' => ['required', 'numeric', 'min:0'],
++            'type' => ['required', 'in:course,software,mixed'],
++            'commission_rate' => ['required', 'numeric', 'min:0', 'max:100'],
++            'preview_youtube_id' => ['nullable', 'string', 'max:50'],
++            'status' => ['required', 'in:active,draft'],
++            'thumbnail' => ['nullable', 'image', 'mimes:jpeg,png,webp', 'max:2048'],
++        ]);
++    }
++
++    private function handleThumbnail(Request $request): ?string
++    {
++        if (! $request->hasFile('thumbnail')) {
++            return null;
++        }
++
++        $file = $request->file('thumbnail');
++        $name = Str::uuid().'.'.$file->getClientOriginalExtension();
++        $path = $file->storeAs('thumbnails', $name, 'public');
++
++        return $path;
++    }
++
++    // ============================================================
++    // Section management
++    // ============================================================
++
++    public function storeSection(Request $request, int $productId): RedirectResponse
++    {
++        $product = Product::findOrFail($productId);
++
++        $data = $request->validate([
++            'title' => ['required', 'string', 'max:200'],
++        ]);
++
++        $maxOrder = (int) $product->sections()->max('order_index');
++
++        $product->sections()->create([
++            'title' => $data['title'],
++            'order_index' => $maxOrder + 1,
++        ]);
++
++        return back()->with('status', 'Section ditambahkan.');
++    }
++
++    public function updateSection(Request $request, int $productId, int $sectionId): RedirectResponse
++    {
++        $section = ProductSection::where('product_id', $productId)->findOrFail($sectionId);
++
++        $data = $request->validate([
++            'title' => ['required', 'string', 'max:200'],
++        ]);
++
++        $section->update($data);
++
++        return back()->with('status', 'Section diperbarui.');
++    }
++
++    public function destroySection(int $productId, int $sectionId): RedirectResponse
++    {
++        $section = ProductSection::where('product_id', $productId)->findOrFail($sectionId);
++        $section->delete();
++
++        return back()->with('status', 'Section dihapus.');
++    }
++
++    // ============================================================
++    // Lesson management
++    // ============================================================
++
++    public function storeLesson(Request $request, int $productId, int $sectionId): RedirectResponse
++    {
++        $section = ProductSection::where('product_id', $productId)->findOrFail($sectionId);
++
++        $data = $this->validateLesson($request);
++
++        $maxOrder = (int) $section->lessons()->max('order_index');
++
++        $section->lessons()->create($data + ['order_index' => $maxOrder + 1]);
++
++        return back()->with('status', 'Lesson ditambahkan.');
++    }
++
++    public function updateLesson(Request $request, int $productId, int $sectionId, int $lessonId): RedirectResponse
++    {
++        $section = ProductSection::where('product_id', $productId)->findOrFail($sectionId);
++        $lesson = ProductLesson::where('section_id', $section->id)->findOrFail($lessonId);
++
++        $data = $this->validateLesson($request);
++
++        $lesson->update($data);
++
++        return back()->with('status', 'Lesson diperbarui.');
++    }
++
++    public function destroyLesson(int $productId, int $sectionId, int $lessonId): RedirectResponse
++    {
++        $section = ProductSection::where('product_id', $productId)->findOrFail($sectionId);
++        $lesson = ProductLesson::where('section_id', $section->id)->findOrFail($lessonId);
++        $lesson->delete();
++
++        return back()->with('status', 'Lesson dihapus.');
++    }
++
++    /**
++     * @return array<string, mixed>
++     */
++    private function validateLesson(Request $request): array
++    {
++        return $request->validate([
++            'title' => ['required', 'string', 'max:200'],
++            'type' => ['required', 'in:video,file,text'],
++            'youtube_id' => ['nullable', 'string', 'max:50'],
++            'gdrive_file_id' => ['nullable', 'string', 'max:100'],
++            'content' => ['nullable', 'string'],
++            'duration_minutes' => ['nullable', 'integer', 'min:0'],
++        ]);
++    }
++
++    // ============================================================
++    // Drag-drop reorder (AJAX)
++    // ============================================================
++
++    public function reorderSections(Request $request, int $productId): JsonResponse
++    {
++        $data = $request->validate([
++            'order' => ['required', 'array'],
++            'order.*' => ['integer'],
++        ]);
++
++        DB::transaction(function () use ($productId, $data) {
++            foreach ($data['order'] as $index => $sectionId) {
++                ProductSection::where('product_id', $productId)
++                    ->where('id', $sectionId)
++                    ->update(['order_index' => $index + 1]);
++            }
++        });
++
++        return response()->json(['ok' => true]);
++    }
++
++    public function reorderLessons(Request $request, int $productId, int $sectionId): JsonResponse
++    {
++        $data = $request->validate([
++            'order' => ['required', 'array'],
++            'order.*' => ['integer'],
++        ]);
++
++        $section = ProductSection::where('product_id', $productId)->findOrFail($sectionId);
++
++        DB::transaction(function () use ($section, $data) {
++            foreach ($data['order'] as $index => $lessonId) {
++                ProductLesson::where('section_id', $section->id)
++                    ->where('id', $lessonId)
++                    ->update(['order_index' => $index + 1]);
++            }
++        });
++
++        return response()->json(['ok' => true]);
++    }
++}
+diff --git a/app/Http/Controllers/Admin/ReportController.php b/app/Http/Controllers/Admin/ReportController.php
+new file mode 100644
+index 0000000..197c9e3
+--- /dev/null
++++ b/app/Http/Controllers/Admin/ReportController.php
+@@ -0,0 +1,71 @@
++<?php
++
++namespace App\Http\Controllers\Admin;
++
++use App\Http\Controllers\Controller;
++use App\Models\Commission;
++use App\Models\Order;
++use App\Models\Product;
++use Illuminate\Http\Request;
++use Illuminate\Support\Carbon;
++use Illuminate\View\View;
++
++class ReportController extends Controller
++{
++    public function index(Request $request): View
++    {
++        $now = now();
++        $year = (int) $request->query('year', $now->year);
++        $month = (int) $request->query('month', $now->month);
++
++        $start = Carbon::create($year, $month, 1)->startOfMonth();
++        $end = $start->copy()->endOfMonth();
++
++        $orders = Order::query()
++            ->where('status', 'paid')
++            ->whereBetween('paid_at', [$start, $end])
++            ->selectRaw('product_id, COUNT(*) as sold, SUM(amount) as revenue')
++            ->groupBy('product_id')
++            ->get()
++            ->keyBy('product_id');
++
++        $commissions = Commission::query()
++            ->whereBetween('commissions.created_at', [$start, $end])
++            ->join('orders', 'orders.id', '=', 'commissions.order_id')
++            ->selectRaw('orders.product_id as product_id, SUM(commissions.amount) as commission_total')
++            ->groupBy('orders.product_id')
++            ->get()
++            ->keyBy('product_id');
++
++        $rows = Product::query()
++            ->orderBy('title')
++            ->get()
++            ->map(function (Product $product) use ($orders, $commissions) {
++                $o = $orders->get($product->id);
++                $c = $commissions->get($product->id);
++
++                return [
++                    'product' => $product,
++                    'sold' => (int) ($o->sold ?? 0),
++                    'revenue' => (float) ($o->revenue ?? 0),
++                    'commission' => (float) ($c->commission_total ?? 0),
++                ];
++            });
++
++        $totals = [
++            'sold' => $rows->sum('sold'),
++            'revenue' => $rows->sum('revenue'),
++            'commission' => $rows->sum('commission'),
++        ];
++
++        $years = range($now->year - 4, $now->year);
++
++        return view('admin.reports', [
++            'year' => $year,
++            'month' => $month,
++            'rows' => $rows,
++            'totals' => $totals,
++            'years' => $years,
++        ]);
++    }
++}
+diff --git a/app/Http/Controllers/Admin/WithdrawalController.php b/app/Http/Controllers/Admin/WithdrawalController.php
+new file mode 100644
+index 0000000..61e7314
+--- /dev/null
++++ b/app/Http/Controllers/Admin/WithdrawalController.php
+@@ -0,0 +1,89 @@
++<?php
++
++namespace App\Http\Controllers\Admin;
++
++use App\Http\Controllers\Controller;
++use App\Mail\WithdrawalProcessedMail;
++use App\Models\User;
++use App\Models\Withdrawal;
++use Illuminate\Http\RedirectResponse;
++use Illuminate\Http\Request;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Mail;
++use Illuminate\View\View;
++
++class WithdrawalController extends Controller
++{
++    public function index(Request $request): View
++    {
++        $filter = $request->query('filter', 'all');
++
++        $query = Withdrawal::with('user')->latest();
++
++        if (in_array($filter, ['pending', 'approved', 'rejected'], true)) {
++            $query->where('status', $filter);
++        }
++
++        $withdrawals = $query->paginate(20)->withQueryString();
++
++        $counts = [
++            'all' => Withdrawal::count(),
++            'pending' => Withdrawal::where('status', 'pending')->count(),
++            'approved' => Withdrawal::where('status', 'approved')->count(),
++            'rejected' => Withdrawal::where('status', 'rejected')->count(),
++        ];
++
++        return view('admin.withdrawals', [
++            'withdrawals' => $withdrawals,
++            'counts' => $counts,
++            'filter' => $filter,
++        ]);
++    }
++
++    public function update(Request $request, int $id): RedirectResponse
++    {
++        $data = $request->validate([
++            'action' => ['required', 'in:approve,reject'],
++            'admin_note' => ['nullable', 'string', 'max:500'],
++        ]);
++
++        $withdrawal = Withdrawal::with('user')->findOrFail($id);
++
++        if ($withdrawal->status !== 'pending') {
++            return back()->with('error', 'Pencairan ini sudah diproses.');
++        }
++
++        if ($data['action'] === 'approve') {
++            $amount = (float) $withdrawal->amount;
++
++            DB::transaction(function () use ($withdrawal, $amount, $data) {
++                $balance = (float) ($withdrawal->user?->balance ?? 0);
++                if ($balance < $amount) {
++                    throw new \RuntimeException('Saldo member tidak mencukupi.');
++                }
++
++                User::where('id', $withdrawal->user_id)->decrement('balance', $amount);
++
++                $withdrawal->update([
++                    'status' => 'approved',
++                    'admin_note' => $data['admin_note'] ?? null,
++                    'processed_at' => now(),
++                ]);
++            });
++        } else {
++            $withdrawal->update([
++                'status' => 'rejected',
++                'admin_note' => $data['admin_note'] ?? null,
++                'processed_at' => now(),
++            ]);
++        }
++
++        $withdrawal->refresh()->loadMissing('user');
++
++        if ($withdrawal->user?->email) {
++            Mail::to($withdrawal->user->email)->queue(new WithdrawalProcessedMail($withdrawal));
++        }
++
++        return back()->with('status', 'Permintaan pencairan berhasil di-'.($data['action'] === 'approve' ? 'setujui' : 'tolak').'.');
++    }
++}
+diff --git a/app/Http/Controllers/LearningController.php b/app/Http/Controllers/LearningController.php
+index 1fb6148..57f7128 100644
+--- a/app/Http/Controllers/LearningController.php
++++ b/app/Http/Controllers/LearningController.php
+@@ -2,12 +2,15 @@
+ 
+ namespace App\Http\Controllers;
+ 
++use App\Mail\CourseCompletedMail;
+ use App\Models\LessonProgress;
+ use App\Models\Product;
+ use App\Models\ProductLesson;
++use App\Models\UserProduct;
+ use Illuminate\Contracts\View\View;
+ use Illuminate\Http\RedirectResponse;
+ use Illuminate\Support\Facades\Log;
++use Illuminate\Support\Facades\Mail;
+ 
+ class LearningController extends Controller
+ {
+@@ -87,7 +90,7 @@ public function markComplete(int $lessonId): RedirectResponse
+         $lesson = ProductLesson::with('section.product')->findOrFail($lessonId);
+         $product = $lesson->section->product;
+ 
+-        $owns = \App\Models\UserProduct::where('user_id', $user->id)
++        $owns = UserProduct::where('user_id', $user->id)
+             ->where('product_id', $product->id)
+             ->exists();
+         abort_unless($owns, 403);
+@@ -109,6 +112,16 @@ public function markComplete(int $lessonId): RedirectResponse
+                 'product_id' => $product->id,
+                 'product' => $product->title,
+             ]);
++
++            $alreadyNotified = LessonProgress::where('user_id', $user->id)
++                ->whereIn('lesson_id', $allLessonIds)
++                ->whereNotNull('completed_at')
++                ->where('completed_at', '<', now()->subSeconds(2))
++                ->count();
++
++            if ($alreadyNotified < count($allLessonIds) && $user->email) {
++                Mail::to($user->email)->queue(new CourseCompletedMail($user, $product));
++            }
+         }
+ 
+         return redirect()
+diff --git a/app/Http/Controllers/PaymentController.php b/app/Http/Controllers/PaymentController.php
+index d822b0d..4f96e6b 100644
+--- a/app/Http/Controllers/PaymentController.php
++++ b/app/Http/Controllers/PaymentController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace App\Http\Controllers;
+ 
++use App\Mail\OrderConfirmedMail;
+ use App\Models\Order;
+ use App\Models\Setting;
+ use App\Models\UserProduct;
+@@ -9,6 +10,7 @@
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Mail;
+ 
+ class PaymentController extends Controller
+ {
+@@ -48,7 +50,12 @@ public function notification(Request $request, CommissionService $commissions):
+                         ['order_id' => $order->id]
+                     );
+                 });
+-                $commissions->calculate($order->fresh(['product', 'user']));
++                $fresh = $order->fresh(['product', 'user']);
++                $commissions->calculate($fresh);
++
++                if ($fresh->user?->email) {
++                    Mail::to($fresh->user->email)->queue(new OrderConfirmedMail($fresh));
++                }
+             }
+         } elseif (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
+             $order->update(['status' => $transactionStatus === 'expire' ? 'expired' : 'failed']);
+diff --git a/app/Mail/CommissionEarnedMail.php b/app/Mail/CommissionEarnedMail.php
+new file mode 100644
+index 0000000..15bcf14
+--- /dev/null
++++ b/app/Mail/CommissionEarnedMail.php
+@@ -0,0 +1,55 @@
++<?php
++
++namespace App\Mail;
++
++use App\Models\Commission;
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Mail\Mailable;
++use Illuminate\Mail\Mailables\Attachment;
++use Illuminate\Mail\Mailables\Content;
++use Illuminate\Mail\Mailables\Envelope;
++use Illuminate\Queue\SerializesModels;
++
++class CommissionEarnedMail extends Mailable implements ShouldQueue
++{
++    use Queueable, SerializesModels;
++
++    public Commission $commission;
++
++    public function __construct(Commission $commission)
++    {
++        $this->commission = $commission->loadMissing(['earner', 'order.product']);
++    }
++
++    public function envelope(): Envelope
++    {
++        return new Envelope(
++            subject: 'Komisi Masuk - Rp '.number_format((float) $this->commission->amount, 0, ',', '.'),
++        );
++    }
++
++    public function content(): Content
++    {
++        $earner = $this->commission->earner;
++        $product = optional($this->commission->order)->product;
++
++        return new Content(
++            markdown: 'emails.commission-earned',
++            with: [
++                'commission' => $this->commission,
++                'earner' => $earner,
++                'product' => $product,
++                'balance' => (float) ($earner->balance ?? 0),
++            ],
++        );
++    }
++
++    /**
++     * @return array<int, Attachment>
++     */
++    public function attachments(): array
++    {
++        return [];
++    }
++}
+diff --git a/app/Mail/CourseCompletedMail.php b/app/Mail/CourseCompletedMail.php
+new file mode 100644
+index 0000000..e41193f
+--- /dev/null
++++ b/app/Mail/CourseCompletedMail.php
+@@ -0,0 +1,54 @@
++<?php
++
++namespace App\Mail;
++
++use App\Models\Product;
++use App\Models\User;
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Mail\Mailable;
++use Illuminate\Mail\Mailables\Attachment;
++use Illuminate\Mail\Mailables\Content;
++use Illuminate\Mail\Mailables\Envelope;
++use Illuminate\Queue\SerializesModels;
++
++class CourseCompletedMail extends Mailable implements ShouldQueue
++{
++    use Queueable, SerializesModels;
++
++    public User $user;
++
++    public Product $product;
++
++    public function __construct(User $user, Product $product)
++    {
++        $this->user = $user;
++        $this->product = $product;
++    }
++
++    public function envelope(): Envelope
++    {
++        return new Envelope(
++            subject: 'Selamat! Kamu Telah Menyelesaikan '.$this->product->title,
++        );
++    }
++
++    public function content(): Content
++    {
++        return new Content(
++            markdown: 'emails.course-completed',
++            with: [
++                'user' => $this->user,
++                'product' => $this->product,
++            ],
++        );
++    }
++
++    /**
++     * @return array<int, Attachment>
++     */
++    public function attachments(): array
++    {
++        return [];
++    }
++}
+diff --git a/app/Mail/OrderConfirmedMail.php b/app/Mail/OrderConfirmedMail.php
+new file mode 100644
+index 0000000..d290498
+--- /dev/null
++++ b/app/Mail/OrderConfirmedMail.php
+@@ -0,0 +1,53 @@
++<?php
++
++namespace App\Mail;
++
++use App\Models\Order;
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Mail\Mailable;
++use Illuminate\Mail\Mailables\Attachment;
++use Illuminate\Mail\Mailables\Content;
++use Illuminate\Mail\Mailables\Envelope;
++use Illuminate\Queue\SerializesModels;
++
++class OrderConfirmedMail extends Mailable implements ShouldQueue
++{
++    use Queueable, SerializesModels;
++
++    public Order $order;
++
++    public function __construct(Order $order)
++    {
++        $this->order = $order->loadMissing(['user', 'product']);
++    }
++
++    public function envelope(): Envelope
++    {
++        $product = $this->order->product?->title ?? 'Produk';
++
++        return new Envelope(
++            subject: 'Pembelian Berhasil - '.$product,
++        );
++    }
++
++    public function content(): Content
++    {
++        return new Content(
++            markdown: 'emails.order-confirmed',
++            with: [
++                'order' => $this->order,
++                'user' => $this->order->user,
++                'product' => $this->order->product,
++            ],
++        );
++    }
++
++    /**
++     * @return array<int, Attachment>
++     */
++    public function attachments(): array
++    {
++        return [];
++    }
++}
+diff --git a/app/Mail/WithdrawalProcessedMail.php b/app/Mail/WithdrawalProcessedMail.php
+new file mode 100644
+index 0000000..f44bfcd
+--- /dev/null
++++ b/app/Mail/WithdrawalProcessedMail.php
+@@ -0,0 +1,50 @@
++<?php
++
++namespace App\Mail;
++
++use App\Models\Withdrawal;
++use Illuminate\Bus\Queueable;
++use Illuminate\Contracts\Queue\ShouldQueue;
++use Illuminate\Mail\Mailable;
++use Illuminate\Mail\Mailables\Attachment;
++use Illuminate\Mail\Mailables\Content;
++use Illuminate\Mail\Mailables\Envelope;
++use Illuminate\Queue\SerializesModels;
++
++class WithdrawalProcessedMail extends Mailable implements ShouldQueue
++{
++    use Queueable, SerializesModels;
++
++    public Withdrawal $withdrawal;
++
++    public function __construct(Withdrawal $withdrawal)
++    {
++        $this->withdrawal = $withdrawal->loadMissing('user');
++    }
++
++    public function envelope(): Envelope
++    {
++        return new Envelope(
++            subject: 'Update Pencairan Dana',
++        );
++    }
++
++    public function content(): Content
++    {
++        return new Content(
++            markdown: 'emails.withdrawal-processed',
++            with: [
++                'withdrawal' => $this->withdrawal,
++                'user' => $this->withdrawal->user,
++            ],
++        );
++    }
++
++    /**
++     * @return array<int, Attachment>
++     */
++    public function attachments(): array
++    {
++        return [];
++    }
++}
+diff --git a/app/Services/CommissionService.php b/app/Services/CommissionService.php
+index b440f1f..68ccd2a 100644
+--- a/app/Services/CommissionService.php
++++ b/app/Services/CommissionService.php
+@@ -2,10 +2,12 @@
+ 
+ namespace App\Services;
+ 
++use App\Mail\CommissionEarnedMail;
+ use App\Models\Commission;
+ use App\Models\Order;
+ use App\Models\User;
+ use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Mail;
+ 
+ class CommissionService
+ {
+@@ -33,14 +35,18 @@ public function calculate(Order $order): void
+ 
+         $level1Amount = round(((float) $order->amount) * ($rate / 100), 2);
+ 
+-        DB::transaction(function () use ($order, $earnerId, $rate, $level1Amount) {
+-            Commission::create([
++        /** @var array<int, int> $newCommissionIds */
++        $newCommissionIds = [];
++
++        DB::transaction(function () use ($order, $earnerId, $level1Amount, &$newCommissionIds) {
++            $c1 = Commission::create([
+                 'order_id' => $order->id,
+                 'earner_id' => $earnerId,
+                 'amount' => $level1Amount,
+                 'level' => 1,
+                 'status' => 'pending',
+             ]);
++            $newCommissionIds[] = $c1->id;
+ 
+             User::where('id', $earnerId)->increment('balance', $level1Amount);
+ 
+@@ -49,17 +55,25 @@ public function calculate(Order $order): void
+                 $level2Amount = $level1Amount;
+ 
+                 if ($level2Amount > 0) {
+-                    Commission::create([
++                    $c2 = Commission::create([
+                         'order_id' => $order->id,
+                         'earner_id' => $level1User->referrer_id,
+                         'amount' => $level2Amount,
+                         'level' => 2,
+                         'status' => 'pending',
+                     ]);
++                    $newCommissionIds[] = $c2->id;
+ 
+                     User::where('id', $level1User->referrer_id)->increment('balance', $level2Amount);
+                 }
+             }
+         });
++
++        foreach ($newCommissionIds as $cid) {
++            $commission = Commission::with(['earner', 'order.product'])->find($cid);
++            if ($commission && $commission->earner?->email) {
++                Mail::to($commission->earner->email)->queue(new CommissionEarnedMail($commission));
++            }
++        }
+     }
+ }
+diff --git a/resources/views/admin/dashboard.blade.php b/resources/views/admin/dashboard.blade.php
+index e3a6511..c8c3820 100644
+--- a/resources/views/admin/dashboard.blade.php
++++ b/resources/views/admin/dashboard.blade.php
+@@ -6,24 +6,114 @@
+     <div class="grid gap-6 md:grid-cols-4">
+         <div class="rounded-lg bg-white border border-gray-200 p-6">
+             <p class="text-sm font-medium text-gray-500">Total Member</p>
+-            <p class="mt-2 text-3xl font-bold text-gray-900">{{ \App\Models\User::where('role', 'member')->count() }}</p>
++            <p class="mt-2 text-3xl font-bold text-gray-900">{{ number_format($totalMembers) }}</p>
+         </div>
+         <div class="rounded-lg bg-white border border-gray-200 p-6">
+-            <p class="text-sm font-medium text-gray-500">Total Produk</p>
+-            <p class="mt-2 text-3xl font-bold text-gray-900">{{ \App\Models\Product::count() }}</p>
++            <p class="text-sm font-medium text-gray-500">Pendapatan Bulan Ini</p>
++            <p class="mt-2 text-3xl font-bold text-green-600">{{ formatRupiah($monthlyRevenue) }}</p>
+         </div>
+         <div class="rounded-lg bg-white border border-gray-200 p-6">
+-            <p class="text-sm font-medium text-gray-500">Pesanan Lunas</p>
+-            <p class="mt-2 text-3xl font-bold text-green-600">{{ \App\Models\Order::where('status', 'paid')->count() }}</p>
++            <p class="text-sm font-medium text-gray-500">Komisi Bulan Ini</p>
++            <p class="mt-2 text-3xl font-bold text-blue-600">{{ formatRupiah($monthlyCommission) }}</p>
+         </div>
+         <div class="rounded-lg bg-white border border-gray-200 p-6">
+-            <p class="text-sm font-medium text-gray-500">Pencairan Pending</p>
+-            <p class="mt-2 text-3xl font-bold text-red-600">{{ \App\Models\Withdrawal::where('status', 'pending')->count() }}</p>
++            <p class="text-sm font-medium text-gray-500">Produk Aktif</p>
++            <p class="mt-2 text-3xl font-bold text-gray-900">{{ number_format($activeProducts) }}</p>
+         </div>
+     </div>
+ 
+-    <div class="mt-6 rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
+-        <p class="text-sm text-gray-500">Ringkasan grafik &amp; aktivitas terbaru akan tampil di sini.</p>
+-        <p class="mt-2 text-xs text-gray-400">(Placeholder — akan diisi oleh <code>Admin\DashboardController@index</code>.)</p>
++    <div class="mt-6 rounded-lg bg-white border border-gray-200 p-6">
++        <div class="flex items-center justify-between mb-4">
++            <h2 class="text-base font-semibold text-gray-900">Pendapatan 30 Hari Terakhir</h2>
++            <span class="text-xs text-gray-500">Berdasarkan tanggal pembayaran</span>
++        </div>
++        <canvas id="revenueChart" height="80"></canvas>
++    </div>
++
++    <div class="mt-6 rounded-lg bg-white border border-gray-200">
++        <div class="px-6 py-4 border-b border-gray-200">
++            <h2 class="text-base font-semibold text-gray-900">10 Transaksi Terbaru</h2>
++        </div>
++
++        @if ($recentOrders->isEmpty())
++            <div class="p-6 text-sm text-gray-500">Belum ada transaksi.</div>
++        @else
++            <div class="overflow-x-auto">
++                <table class="min-w-full divide-y divide-gray-200 text-sm">
++                    <thead class="bg-gray-50">
++                        <tr class="text-left text-xs uppercase tracking-wide text-gray-500">
++                            <th class="px-4 py-3">Order</th>
++                            <th class="px-4 py-3">Member</th>
++                            <th class="px-4 py-3">Produk</th>
++                            <th class="px-4 py-3">Jumlah</th>
++                            <th class="px-4 py-3">Status</th>
++                            <th class="px-4 py-3">Tanggal</th>
++                        </tr>
++                    </thead>
++                    <tbody class="divide-y divide-gray-100">
++                        @foreach ($recentOrders as $order)
++                            <tr>
++                                <td class="px-4 py-3 font-mono text-xs text-gray-700">{{ $order->midtrans_order_id }}</td>
++                                <td class="px-4 py-3">{{ $order->user?->name ?? '-' }}</td>
++                                <td class="px-4 py-3">{{ $order->product?->title ?? '-' }}</td>
++                                <td class="px-4 py-3 font-semibold">{{ formatRupiah($order->amount) }}</td>
++                                <td class="px-4 py-3">
++                                    @if ($order->status === 'paid')
++                                        <span class="inline-flex rounded-full bg-green-100 text-green-800 text-xs font-semibold px-2 py-0.5">Lunas</span>
++                                    @elseif (in_array($order->status, ['failed', 'expired'], true))
++                                        <span class="inline-flex rounded-full bg-red-100 text-red-800 text-xs font-semibold px-2 py-0.5">{{ ucfirst($order->status) }}</span>
++                                    @else
++                                        <span class="inline-flex rounded-full bg-yellow-100 text-yellow-800 text-xs font-semibold px-2 py-0.5">Pending</span>
++                                    @endif
++                                </td>
++                                <td class="px-4 py-3 text-xs text-gray-600">{{ $order->created_at->format('d M Y H:i') }}</td>
++                            </tr>
++                        @endforeach
++                    </tbody>
++                </table>
++            </div>
++        @endif
+     </div>
++
++    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
++    <script>
++        (function () {
++            const ctx = document.getElementById('revenueChart');
++            if (!ctx) return;
++            const labels = @json($chartLabels);
++            const values = @json($chartValues);
++            new Chart(ctx, {
++                type: 'line',
++                data: {
++                    labels: labels,
++                    datasets: [{
++                        label: 'Pendapatan (Rp)',
++                        data: values,
++                        borderColor: '#1d4ed8',
++                        backgroundColor: 'rgba(29, 78, 216, 0.08)',
++                        fill: true,
++                        tension: 0.3,
++                        pointRadius: 2,
++                    }]
++                },
++                options: {
++                    responsive: true,
++                    maintainAspectRatio: false,
++                    scales: {
++                        y: {
++                            beginAtZero: true,
++                            ticks: {
++                                callback: function (value) {
++                                    return 'Rp ' + Number(value).toLocaleString('id-ID');
++                                }
++                            }
++                        }
++                    },
++                    plugins: {
++                        legend: { display: false }
++                    }
++                }
++            });
++        })();
++    </script>
+ @endsection
+diff --git a/resources/views/admin/members.blade.php b/resources/views/admin/members.blade.php
+deleted file mode 100644
+index c4a7585..0000000
+--- a/resources/views/admin/members.blade.php
++++ /dev/null
+@@ -1,11 +0,0 @@
+-@extends('layouts.admin')
+-
+-@section('title', 'Kelola Member')
+-
+-@section('content')
+-    <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
+-        <h2 class="text-lg font-semibold text-gray-900">Kelola Member</h2>
+-        <p class="mt-2 text-sm text-gray-500">Daftar user, role, dan referral tree akan tampil di sini.</p>
+-        <p class="mt-2 text-xs text-gray-400">(Placeholder — <code>Admin\MemberController</code>.)</p>
+-    </div>
+-@endsection
+diff --git a/resources/views/admin/members/index.blade.php b/resources/views/admin/members/index.blade.php
+new file mode 100644
+index 0000000..2ccb57d
+--- /dev/null
++++ b/resources/views/admin/members/index.blade.php
+@@ -0,0 +1,49 @@
++@extends('layouts.admin')
++
++@section('title', 'Kelola Member')
++
++@section('content')
++    <header class="mb-6">
++        <h1 class="text-2xl font-bold text-gray-900">Kelola Member</h1>
++        <p class="mt-1 text-sm text-gray-600">Daftar member, referrer, jumlah produk dibeli, dan saldo komisi.</p>
++    </header>
++
++    @if ($members->total() === 0)
++        <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-gray-500">
++            Belum ada member terdaftar.
++        </div>
++    @else
++        <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
++            <table class="min-w-full divide-y divide-gray-200 text-sm">
++                <thead class="bg-gray-50">
++                    <tr class="text-left text-xs uppercase tracking-wide text-gray-500">
++                        <th class="px-4 py-3">Nama</th>
++                        <th class="px-4 py-3">Email</th>
++                        <th class="px-4 py-3">Referrer</th>
++                        <th class="px-4 py-3">Produk Dibeli</th>
++                        <th class="px-4 py-3">Saldo</th>
++                        <th class="px-4 py-3">Tanggal</th>
++                        <th class="px-4 py-3 text-right">Aksi</th>
++                    </tr>
++                </thead>
++                <tbody class="divide-y divide-gray-100">
++                    @foreach ($members as $member)
++                        <tr>
++                            <td class="px-4 py-3 font-medium text-gray-900">{{ $member->name }}</td>
++                            <td class="px-4 py-3">{{ $member->email }}</td>
++                            <td class="px-4 py-3">{{ $member->referrer?->name ?? '-' }}</td>
++                            <td class="px-4 py-3">{{ $member->products_count }}</td>
++                            <td class="px-4 py-3 font-semibold">{{ formatRupiah($member->balance) }}</td>
++                            <td class="px-4 py-3 text-xs text-gray-600">{{ $member->created_at->format('d M Y') }}</td>
++                            <td class="px-4 py-3 text-right">
++                                <a href="{{ route('admin.members.show', $member->id) }}" class="text-blue-700 hover:underline">Detail</a>
++                            </td>
++                        </tr>
++                    @endforeach
++                </tbody>
++            </table>
++        </div>
++
++        <div class="mt-6">{{ $members->onEachSide(1)->links() }}</div>
++    @endif
++@endsection
+diff --git a/resources/views/admin/members/show.blade.php b/resources/views/admin/members/show.blade.php
+new file mode 100644
+index 0000000..58961ba
+--- /dev/null
++++ b/resources/views/admin/members/show.blade.php
+@@ -0,0 +1,126 @@
++@extends('layouts.admin')
++
++@section('title', 'Detail Member')
++
++@section('content')
++    <header class="mb-6 flex items-center justify-between">
++        <div>
++            <h1 class="text-2xl font-bold text-gray-900">{{ $member->name }}</h1>
++            <p class="mt-1 text-sm text-gray-600">{{ $member->email }} · Member sejak {{ $member->created_at->format('d M Y') }}</p>
++        </div>
++        <a href="{{ route('admin.members.index') }}" class="text-sm text-gray-600 hover:underline">&larr; Kembali</a>
++    </header>
++
++    <section class="grid gap-6 md:grid-cols-3">
++        <div class="rounded-lg bg-white border border-gray-200 p-6">
++            <p class="text-xs font-medium text-gray-500 uppercase">Saldo Komisi</p>
++            <p class="mt-2 text-2xl font-bold text-blue-700">{{ formatRupiah($member->balance) }}</p>
++        </div>
++        <div class="rounded-lg bg-white border border-gray-200 p-6">
++            <p class="text-xs font-medium text-gray-500 uppercase">Referrer</p>
++            <p class="mt-2 text-base font-semibold text-gray-900">{{ $member->referrer?->name ?? '—' }}</p>
++            @if ($member->referrer)
++                <p class="text-xs text-gray-500">{{ $member->referrer->email }}</p>
++            @endif
++        </div>
++        <div class="rounded-lg bg-white border border-gray-200 p-6">
++            <p class="text-xs font-medium text-gray-500 uppercase">Downline Langsung</p>
++            <p class="mt-2 text-2xl font-bold text-gray-900">{{ $member->referrals->count() }}</p>
++        </div>
++    </section>
++
++    <section class="mt-6 rounded-lg bg-white border border-gray-200">
++        <header class="px-6 py-4 border-b border-gray-200">
++            <h2 class="text-base font-semibold text-gray-900">Downline (Referral Tree Level 1)</h2>
++        </header>
++        @if ($member->referrals->isEmpty())
++            <div class="p-6 text-sm text-gray-500">Belum ada downline.</div>
++        @else
++            <ul class="divide-y divide-gray-100">
++                @foreach ($member->referrals as $ref)
++                    <li class="px-6 py-3 flex items-center justify-between text-sm">
++                        <div>
++                            <span class="font-medium text-gray-900">{{ $ref->name }}</span>
++                            <span class="text-gray-500"> · {{ $ref->email }}</span>
++                        </div>
++                        <span class="text-xs text-gray-500">Bergabung {{ $ref->created_at->format('d M Y') }}</span>
++                    </li>
++                @endforeach
++            </ul>
++        @endif
++    </section>
++
++    <section class="mt-6 rounded-lg bg-white border border-gray-200">
++        <header class="px-6 py-4 border-b border-gray-200">
++            <h2 class="text-base font-semibold text-gray-900">Produk Dibeli</h2>
++        </header>
++        @if ($purchasedProducts->isEmpty())
++            <div class="p-6 text-sm text-gray-500">Belum ada produk dibeli.</div>
++        @else
++            <ul class="divide-y divide-gray-100">
++                @foreach ($purchasedProducts as $up)
++                    <li class="px-6 py-3 text-sm">
++                        <span class="font-medium text-gray-900">{{ $up->product?->title ?? '—' }}</span>
++                        <span class="ml-2 text-xs text-gray-500">{{ $up->created_at->format('d M Y') }}</span>
++                    </li>
++                @endforeach
++            </ul>
++        @endif
++    </section>
++
++    <section class="mt-6 rounded-lg bg-white border border-gray-200">
++        <header class="px-6 py-4 border-b border-gray-200">
++            <h2 class="text-base font-semibold text-gray-900">Riwayat Pembelian</h2>
++        </header>
++        @if ($orders->isEmpty())
++            <div class="p-6 text-sm text-gray-500">Belum ada pembelian.</div>
++        @else
++            <div class="overflow-x-auto">
++                <table class="min-w-full divide-y divide-gray-200 text-sm">
++                    <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
++                        <tr><th class="px-4 py-3 text-left">Order ID</th><th class="px-4 py-3 text-left">Produk</th><th class="px-4 py-3 text-left">Jumlah</th><th class="px-4 py-3 text-left">Status</th><th class="px-4 py-3 text-left">Tanggal</th></tr>
++                    </thead>
++                    <tbody class="divide-y divide-gray-100">
++                        @foreach ($orders as $order)
++                            <tr>
++                                <td class="px-4 py-3 font-mono text-xs">{{ $order->midtrans_order_id }}</td>
++                                <td class="px-4 py-3">{{ $order->product?->title ?? '-' }}</td>
++                                <td class="px-4 py-3">{{ formatRupiah($order->amount) }}</td>
++                                <td class="px-4 py-3 capitalize">{{ $order->status }}</td>
++                                <td class="px-4 py-3 text-xs">{{ $order->created_at->format('d M Y H:i') }}</td>
++                            </tr>
++                        @endforeach
++                    </tbody>
++                </table>
++            </div>
++        @endif
++    </section>
++
++    <section class="mt-6 rounded-lg bg-white border border-gray-200">
++        <header class="px-6 py-4 border-b border-gray-200">
++            <h2 class="text-base font-semibold text-gray-900">Riwayat Komisi</h2>
++        </header>
++        @if ($commissions->isEmpty())
++            <div class="p-6 text-sm text-gray-500">Belum ada komisi.</div>
++        @else
++            <div class="overflow-x-auto">
++                <table class="min-w-full divide-y divide-gray-200 text-sm">
++                    <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
++                        <tr><th class="px-4 py-3 text-left">Tanggal</th><th class="px-4 py-3 text-left">Produk</th><th class="px-4 py-3 text-left">Level</th><th class="px-4 py-3 text-left">Jumlah</th><th class="px-4 py-3 text-left">Status</th></tr>
++                    </thead>
++                    <tbody class="divide-y divide-gray-100">
++                        @foreach ($commissions as $c)
++                            <tr>
++                                <td class="px-4 py-3 text-xs">{{ $c->created_at->format('d M Y H:i') }}</td>
++                                <td class="px-4 py-3">{{ $c->order?->product?->title ?? '-' }}</td>
++                                <td class="px-4 py-3">L{{ $c->level }}</td>
++                                <td class="px-4 py-3 font-semibold">{{ formatRupiah($c->amount) }}</td>
++                                <td class="px-4 py-3 capitalize">{{ $c->status }}</td>
++                            </tr>
++                        @endforeach
++                    </tbody>
++                </table>
++            </div>
++        @endif
++    </section>
++@endsection
+diff --git a/resources/views/admin/products.blade.php b/resources/views/admin/products.blade.php
+deleted file mode 100644
+index c652176..0000000
+--- a/resources/views/admin/products.blade.php
++++ /dev/null
+@@ -1,11 +0,0 @@
+-@extends('layouts.admin')
+-
+-@section('title', 'Kelola Produk')
+-
+-@section('content')
+-    <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
+-        <h2 class="text-lg font-semibold text-gray-900">Kelola Produk</h2>
+-        <p class="mt-2 text-sm text-gray-500">CRUD produk, section, dan lesson akan tampil di sini.</p>
+-        <p class="mt-2 text-xs text-gray-400">(Placeholder — <code>Admin\ProductController</code>.)</p>
+-    </div>
+-@endsection
+diff --git a/resources/views/admin/products/_form.blade.php b/resources/views/admin/products/_form.blade.php
+new file mode 100644
+index 0000000..575c3aa
+--- /dev/null
++++ b/resources/views/admin/products/_form.blade.php
+@@ -0,0 +1,112 @@
++@php
++    $product = $product ?? null;
++    $isEdit = (bool) $product;
++@endphp
++
++<div class="grid gap-6 md:grid-cols-2">
++    <div>
++        <label class="block text-sm font-medium text-gray-700">Judul</label>
++        <input type="text" name="title" id="product-title"
++               value="{{ old('title', $product->title ?? '') }}"
++               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" required>
++        @error('title') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++    </div>
++    <div>
++        <label class="block text-sm font-medium text-gray-700">Slug</label>
++        <input type="text" name="slug" id="product-slug"
++               value="{{ old('slug', $product->slug ?? '') }}"
++               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" required>
++        <p class="mt-1 text-xs text-gray-500">Hanya huruf kecil, angka, dan tanda hubung. Akan diisi otomatis dari judul.</p>
++        @error('slug') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++    </div>
++</div>
++
++<div class="mt-6">
++    <label class="block text-sm font-medium text-gray-700">Deskripsi</label>
++    <textarea name="description" rows="5" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" required>{{ old('description', $product->description ?? '') }}</textarea>
++    @error('description') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++</div>
++
++<div class="mt-6 grid gap-6 md:grid-cols-3">
++    <div>
++        <label class="block text-sm font-medium text-gray-700">Harga (Rp)</label>
++        <input type="number" min="0" step="1" name="price"
++               value="{{ old('price', $product?->price !== null ? (int) $product->price : '') }}"
++               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" required>
++        @error('price') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++    </div>
++    <div>
++        <label class="block text-sm font-medium text-gray-700">Tipe</label>
++        <select name="type" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" required>
++            @foreach (['course' => 'Course', 'software' => 'Software', 'mixed' => 'Mixed'] as $value => $label)
++                <option value="{{ $value }}" @selected(old('type', $product->type ?? '') === $value)>{{ $label }}</option>
++            @endforeach
++        </select>
++        @error('type') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++    </div>
++    <div>
++        <label class="block text-sm font-medium text-gray-700">Komisi (%)</label>
++        <input type="number" min="0" max="100" step="0.01" name="commission_rate"
++               value="{{ old('commission_rate', $product->commission_rate ?? '30') }}"
++               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" required>
++        @error('commission_rate') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++    </div>
++</div>
++
++<div class="mt-6 grid gap-6 md:grid-cols-2">
++    <div>
++        <label class="block text-sm font-medium text-gray-700">Preview YouTube ID</label>
++        <input type="text" name="preview_youtube_id"
++               value="{{ old('preview_youtube_id', $product->preview_youtube_id ?? '') }}"
++               placeholder="dQw4w9WgXcQ"
++               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
++        @error('preview_youtube_id') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++    </div>
++    <div>
++        <label class="block text-sm font-medium text-gray-700">Status</label>
++        <select name="status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" required>
++            @foreach (['active' => 'Aktif', 'draft' => 'Draft'] as $value => $label)
++                <option value="{{ $value }}" @selected(old('status', $product->status ?? 'draft') === $value)>{{ $label }}</option>
++            @endforeach
++        </select>
++        @error('status') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++    </div>
++</div>
++
++<div class="mt-6">
++    <label class="block text-sm font-medium text-gray-700">Thumbnail</label>
++    @if ($isEdit && $product->thumbnail)
++        <div class="mt-2 mb-2">
++            <img src="{{ asset('storage/'.$product->thumbnail) }}" alt="thumbnail" class="h-24 w-40 rounded object-cover border border-gray-200">
++        </div>
++    @endif
++    <input type="file" name="thumbnail" accept="image/jpeg,image/png,image/webp" class="mt-1 block w-full text-sm">
++    <p class="mt-1 text-xs text-gray-500">JPEG, PNG, atau WEBP. Maksimal 2 MB.</p>
++    @error('thumbnail') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
++</div>
++
++<div class="mt-8 flex items-center justify-end gap-3">
++    <a href="{{ route('admin.products.index') }}" class="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Batal</a>
++    <button type="submit" class="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800">
++        {{ $isEdit ? 'Simpan Perubahan' : 'Buat Produk' }}
++    </button>
++</div>
++
++<script>
++    (function () {
++        const titleEl = document.getElementById('product-title');
++        const slugEl = document.getElementById('product-slug');
++        if (!titleEl || !slugEl) return;
++        let userEdited = {{ $isEdit ? 'true' : 'false' }};
++        slugEl.addEventListener('input', function () { userEdited = true; });
++        titleEl.addEventListener('input', function () {
++            if (userEdited) return;
++            const v = titleEl.value.toLowerCase()
++                .replace(/[^a-z0-9\s-]/g, '')
++                .trim()
++                .replace(/\s+/g, '-')
++                .replace(/-+/g, '-');
++            slugEl.value = v;
++        });
++    })();
++</script>
+diff --git a/resources/views/admin/products/_lesson_fields.blade.php b/resources/views/admin/products/_lesson_fields.blade.php
+new file mode 100644
+index 0000000..7c81789
+--- /dev/null
++++ b/resources/views/admin/products/_lesson_fields.blade.php
+@@ -0,0 +1,36 @@
++@php $lesson = $lesson ?? null; @endphp
++
++<div class="grid gap-3 md:grid-cols-2">
++    <div>
++        <label class="block text-xs font-medium text-gray-700">Judul Lesson</label>
++        <input type="text" name="title" value="{{ old('title', $lesson->title ?? '') }}" required
++               class="mt-1 block w-full rounded-md border-gray-300 text-sm">
++    </div>
++    <div>
++        <label class="block text-xs font-medium text-gray-700">Tipe</label>
++        <select name="type" required class="mt-1 block w-full rounded-md border-gray-300 text-sm">
++            @foreach (['video' => 'Video', 'file' => 'File', 'text' => 'Text'] as $value => $label)
++                <option value="{{ $value }}" @selected(old('type', $lesson->type ?? 'video') === $value)>{{ $label }}</option>
++            @endforeach
++        </select>
++    </div>
++    <div>
++        <label class="block text-xs font-medium text-gray-700">YouTube ID</label>
++        <input type="text" name="youtube_id" value="{{ old('youtube_id', $lesson->youtube_id ?? '') }}"
++               class="mt-1 block w-full rounded-md border-gray-300 text-sm">
++    </div>
++    <div>
++        <label class="block text-xs font-medium text-gray-700">Google Drive File ID</label>
++        <input type="text" name="gdrive_file_id" value="{{ old('gdrive_file_id', $lesson->gdrive_file_id ?? '') }}"
++               class="mt-1 block w-full rounded-md border-gray-300 text-sm">
++    </div>
++    <div class="md:col-span-2">
++        <label class="block text-xs font-medium text-gray-700">Konten (untuk tipe text)</label>
++        <textarea name="content" rows="3" class="mt-1 block w-full rounded-md border-gray-300 text-sm">{{ old('content', $lesson->content ?? '') }}</textarea>
++    </div>
++    <div>
++        <label class="block text-xs font-medium text-gray-700">Durasi (menit)</label>
++        <input type="number" name="duration_minutes" min="0" value="{{ old('duration_minutes', $lesson->duration_minutes ?? 0) }}"
++               class="mt-1 block w-full rounded-md border-gray-300 text-sm">
++    </div>
++</div>
+diff --git a/resources/views/admin/products/create.blade.php b/resources/views/admin/products/create.blade.php
+new file mode 100644
+index 0000000..24927c4
+--- /dev/null
++++ b/resources/views/admin/products/create.blade.php
+@@ -0,0 +1,15 @@
++@extends('layouts.admin')
++
++@section('title', 'Produk Baru')
++
++@section('content')
++    <header class="mb-6">
++        <h1 class="text-2xl font-bold text-gray-900">Produk Baru</h1>
++        <p class="mt-1 text-sm text-gray-600">Isi data dasar produk. Section dan lesson bisa ditambahkan setelah produk dibuat.</p>
++    </header>
++
++    <form method="POST" action="{{ route('admin.products.store') }}" enctype="multipart/form-data" class="rounded-lg bg-white border border-gray-200 p-6">
++        @csrf
++        @include('admin.products._form')
++    </form>
++@endsection
+diff --git a/resources/views/admin/products/edit.blade.php b/resources/views/admin/products/edit.blade.php
+new file mode 100644
+index 0000000..6e0d042
+--- /dev/null
++++ b/resources/views/admin/products/edit.blade.php
+@@ -0,0 +1,167 @@
++@extends('layouts.admin')
++
++@section('title', 'Edit Produk')
++
++@section('content')
++    <header class="mb-6 flex items-center justify-between">
++        <div>
++            <h1 class="text-2xl font-bold text-gray-900">Edit Produk</h1>
++            <p class="mt-1 text-sm text-gray-600">Perbarui data produk, kelola section dan lesson.</p>
++        </div>
++        <a href="{{ route('admin.products.index') }}" class="text-sm text-gray-600 hover:underline">&larr; Kembali</a>
++    </header>
++
++    @if (session('status'))
++        <div class="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">{{ session('status') }}</div>
++    @endif
++
++    <form method="POST" action="{{ route('admin.products.update', $product->id) }}" enctype="multipart/form-data" class="rounded-lg bg-white border border-gray-200 p-6">
++        @csrf
++        @method('PUT')
++        @include('admin.products._form', ['product' => $product])
++    </form>
++
++    <section class="mt-10">
++        <div class="flex items-center justify-between mb-4">
++            <h2 class="text-lg font-semibold text-gray-900">Section &amp; Lesson</h2>
++            <button type="button" onclick="document.getElementById('add-section-form').classList.toggle('hidden')"
++                    class="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800">+ Tambah Section</button>
++        </div>
++
++        <form id="add-section-form" method="POST" action="{{ route('admin.products.sections.store', $product->id) }}"
++              class="hidden mb-4 rounded-md border border-blue-200 bg-blue-50 p-4">
++            @csrf
++            <div class="flex gap-2">
++                <input type="text" name="title" placeholder="Judul section..." required
++                       class="flex-1 rounded-md border-gray-300 shadow-sm text-sm">
++                <button type="submit" class="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800">Simpan</button>
++            </div>
++        </form>
++
++        <ul id="sections-list" class="space-y-4" data-product-id="{{ $product->id }}">
++            @foreach ($product->sections as $section)
++                <li class="rounded-lg bg-white border border-gray-200" data-section-id="{{ $section->id }}">
++                    <div class="px-4 py-3 flex items-center justify-between border-b border-gray-200 bg-gray-50 cursor-move section-handle">
++                        <div class="flex items-center gap-2">
++                            <span class="text-gray-400">&#x2630;</span>
++                            <form method="POST" action="{{ route('admin.products.sections.update', [$product->id, $section->id]) }}" class="flex items-center gap-2">
++                                @csrf
++                                @method('PUT')
++                                <input type="text" name="title" value="{{ $section->title }}" class="rounded border-gray-300 text-sm" required>
++                                <button type="submit" class="text-xs text-blue-700 hover:underline">Simpan</button>
++                            </form>
++                        </div>
++                        <div class="flex items-center gap-2">
++                            <button type="button" onclick="document.getElementById('add-lesson-{{ $section->id }}').classList.toggle('hidden')"
++                                    class="text-xs text-blue-700 hover:underline">+ Lesson</button>
++                            <form method="POST" action="{{ route('admin.products.sections.destroy', [$product->id, $section->id]) }}"
++                                  onsubmit="return confirm('Hapus section ini? Semua lesson di dalamnya juga akan dihapus.');">
++                                @csrf
++                                @method('DELETE')
++                                <button type="submit" class="text-xs text-red-600 hover:underline">Hapus</button>
++                            </form>
++                        </div>
++                    </div>
++
++                    <form id="add-lesson-{{ $section->id }}" method="POST"
++                          action="{{ route('admin.products.sections.lessons.store', [$product->id, $section->id]) }}"
++                          class="hidden p-4 border-b border-gray-200 bg-blue-50">
++                        @csrf
++                        @include('admin.products._lesson_fields')
++                        <div class="mt-3 flex justify-end">
++                            <button type="submit" class="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800">Tambah Lesson</button>
++                        </div>
++                    </form>
++
++                    <ul class="lessons-list divide-y divide-gray-100" data-section-id="{{ $section->id }}">
++                        @foreach ($section->lessons as $lesson)
++                            <li class="px-4 py-3 flex items-start justify-between gap-3 cursor-move lesson-handle" data-lesson-id="{{ $lesson->id }}">
++                                <div class="flex-1">
++                                    <div class="flex items-center gap-2">
++                                        <span class="text-gray-400">&#x2630;</span>
++                                        <span class="font-medium text-gray-900">{{ $lesson->title }}</span>
++                                        <span class="text-xs text-gray-500 capitalize">[{{ $lesson->type }}]</span>
++                                        @if ($lesson->duration_minutes)
++                                            <span class="text-xs text-gray-500">{{ $lesson->duration_minutes }} menit</span>
++                                        @endif
++                                    </div>
++                                    <details class="mt-2">
++                                        <summary class="cursor-pointer text-xs text-blue-700">Edit lesson</summary>
++                                        <form method="POST" action="{{ route('admin.products.sections.lessons.update', [$product->id, $section->id, $lesson->id]) }}" class="mt-2">
++                                            @csrf
++                                            @method('PUT')
++                                            @include('admin.products._lesson_fields', ['lesson' => $lesson])
++                                            <div class="mt-3 flex justify-end">
++                                                <button type="submit" class="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800">Simpan</button>
++                                            </div>
++                                        </form>
++                                    </details>
++                                </div>
++                                <form method="POST" action="{{ route('admin.products.sections.lessons.destroy', [$product->id, $section->id, $lesson->id]) }}"
++                                      onsubmit="return confirm('Hapus lesson ini?');">
++                                    @csrf
++                                    @method('DELETE')
++                                    <button type="submit" class="text-xs text-red-600 hover:underline">Hapus</button>
++                                </form>
++                            </li>
++                        @endforeach
++                    </ul>
++                </li>
++            @endforeach
++        </ul>
++
++        @if ($product->sections->isEmpty())
++            <div class="rounded-lg border border-dashed border-gray-300 bg-white p-8 text-center text-sm text-gray-500">
++                Belum ada section. Klik "+ Tambah Section" di atas.
++            </div>
++        @endif
++    </section>
++
++    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
++    <script>
++        (function () {
++            const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
++            const productId = {{ $product->id }};
++
++            const sectionsList = document.getElementById('sections-list');
++            if (sectionsList) {
++                Sortable.create(sectionsList, {
++                    handle: '.section-handle',
++                    animation: 150,
++                    onEnd: function () {
++                        const order = Array.from(sectionsList.children).map(li => parseInt(li.dataset.sectionId, 10));
++                        fetch(`{{ url('admin/produk') }}/${productId}/sections/reorder`, {
++                            method: 'POST',
++                            headers: {
++                                'Content-Type': 'application/json',
++                                'X-CSRF-TOKEN': csrf,
++                                'Accept': 'application/json',
++                            },
++                            body: JSON.stringify({ order }),
++                        });
++                    }
++                });
++            }
++
++            document.querySelectorAll('.lessons-list').forEach(function (ul) {
++                const sectionId = parseInt(ul.dataset.sectionId, 10);
++                Sortable.create(ul, {
++                    handle: '.lesson-handle',
++                    animation: 150,
++                    onEnd: function () {
++                        const order = Array.from(ul.children).map(li => parseInt(li.dataset.lessonId, 10));
++                        fetch(`{{ url('admin/produk') }}/${productId}/sections/${sectionId}/lessons/reorder`, {
++                            method: 'POST',
++                            headers: {
++                                'Content-Type': 'application/json',
++                                'X-CSRF-TOKEN': csrf,
++                                'Accept': 'application/json',
++                            },
++                            body: JSON.stringify({ order }),
++                        });
++                    }
++                });
++            });
++        })();
++    </script>
++@endsection
+diff --git a/resources/views/admin/products/index.blade.php b/resources/views/admin/products/index.blade.php
+new file mode 100644
+index 0000000..5191522
+--- /dev/null
++++ b/resources/views/admin/products/index.blade.php
+@@ -0,0 +1,77 @@
++@extends('layouts.admin')
++
++@section('title', 'Kelola Produk')
++
++@section('content')
++    <header class="mb-6 flex items-center justify-between">
++        <div>
++            <h1 class="text-2xl font-bold text-gray-900">Kelola Produk</h1>
++            <p class="mt-1 text-sm text-gray-600">Kelola katalog produk, section, dan lesson.</p>
++        </div>
++        <a href="{{ route('admin.products.create') }}" class="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800">+ Produk Baru</a>
++    </header>
++
++    @if (session('status'))
++        <div class="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">{{ session('status') }}</div>
++    @endif
++
++    @if ($products->total() === 0)
++        <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-gray-500">
++            Belum ada produk. <a href="{{ route('admin.products.create') }}" class="text-blue-700 underline">Buat produk pertama</a>.
++        </div>
++    @else
++        <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
++            <table class="min-w-full divide-y divide-gray-200 text-sm">
++                <thead class="bg-gray-50">
++                    <tr class="text-left text-xs uppercase tracking-wide text-gray-500">
++                        <th class="px-4 py-3">Thumbnail</th>
++                        <th class="px-4 py-3">Judul</th>
++                        <th class="px-4 py-3">Tipe</th>
++                        <th class="px-4 py-3">Harga</th>
++                        <th class="px-4 py-3">Komisi %</th>
++                        <th class="px-4 py-3">Status</th>
++                        <th class="px-4 py-3 text-right">Aksi</th>
++                    </tr>
++                </thead>
++                <tbody class="divide-y divide-gray-100">
++                    @foreach ($products as $product)
++                        <tr>
++                            <td class="px-4 py-3">
++                                @if ($product->thumbnail)
++                                    <img src="{{ asset('storage/'.$product->thumbnail) }}" alt="{{ $product->title }}" class="h-10 w-16 rounded object-cover">
++                                @else
++                                    <div class="h-10 w-16 rounded bg-gray-100"></div>
++                                @endif
++                            </td>
++                            <td class="px-4 py-3">
++                                <div class="font-medium text-gray-900">{{ $product->title }}</div>
++                                <div class="text-xs text-gray-500">{{ $product->slug }}</div>
++                            </td>
++                            <td class="px-4 py-3 capitalize">{{ $product->type }}</td>
++                            <td class="px-4 py-3 font-semibold">{{ formatRupiah($product->price) }}</td>
++                            <td class="px-4 py-3">{{ rtrim(rtrim((string) $product->commission_rate, '0'), '.') }}%</td>
++                            <td class="px-4 py-3">
++                                @if ($product->status === 'active')
++                                    <span class="inline-flex rounded-full bg-green-100 text-green-800 text-xs font-semibold px-2 py-0.5">Aktif</span>
++                                @else
++                                    <span class="inline-flex rounded-full bg-gray-100 text-gray-700 text-xs font-semibold px-2 py-0.5">Draft</span>
++                                @endif
++                            </td>
++                            <td class="px-4 py-3 text-right">
++                                <a href="{{ route('admin.products.edit', $product->id) }}" class="text-blue-700 hover:underline">Edit</a>
++                                <form method="POST" action="{{ route('admin.products.destroy', $product->id) }}" class="inline"
++                                      onsubmit="return confirm('Hapus produk ini? Section dan lesson akan ikut terhapus.');">
++                                    @csrf
++                                    @method('DELETE')
++                                    <button type="submit" class="ml-2 text-red-600 hover:underline">Hapus</button>
++                                </form>
++                            </td>
++                        </tr>
++                    @endforeach
++                </tbody>
++            </table>
++        </div>
++
++        <div class="mt-6">{{ $products->onEachSide(1)->links() }}</div>
++    @endif
++@endsection
+diff --git a/resources/views/admin/reports.blade.php b/resources/views/admin/reports.blade.php
+new file mode 100644
+index 0000000..948d061
+--- /dev/null
++++ b/resources/views/admin/reports.blade.php
+@@ -0,0 +1,70 @@
++@extends('layouts.admin')
++
++@section('title', 'Laporan')
++
++@section('content')
++    <header class="mb-6">
++        <h1 class="text-2xl font-bold text-gray-900">Laporan Penjualan</h1>
++        <p class="mt-1 text-sm text-gray-600">Ringkasan penjualan, pendapatan, dan komisi per produk per bulan.</p>
++    </header>
++
++    <form method="GET" class="mb-6 flex flex-wrap items-end gap-3 rounded-lg bg-white border border-gray-200 p-4">
++        <div>
++            <label class="block text-xs font-medium text-gray-700">Bulan</label>
++            <select name="month" class="mt-1 rounded-md border-gray-300 text-sm">
++                @foreach (range(1, 12) as $m)
++                    <option value="{{ $m }}" @selected($m === $month)>
++                        {{ \Carbon\Carbon::create(null, $m, 1)->isoFormat('MMMM') }}
++                    </option>
++                @endforeach
++            </select>
++        </div>
++        <div>
++            <label class="block text-xs font-medium text-gray-700">Tahun</label>
++            <select name="year" class="mt-1 rounded-md border-gray-300 text-sm">
++                @foreach ($years as $y)
++                    <option value="{{ $y }}" @selected($y === $year)>{{ $y }}</option>
++                @endforeach
++            </select>
++        </div>
++        <button type="submit" class="rounded-md bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800">Tampilkan</button>
++    </form>
++
++    <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
++        <table class="min-w-full divide-y divide-gray-200 text-sm">
++            <thead class="bg-gray-50">
++                <tr class="text-left text-xs uppercase tracking-wide text-gray-500">
++                    <th class="px-4 py-3">Produk</th>
++                    <th class="px-4 py-3 text-right">Terjual</th>
++                    <th class="px-4 py-3 text-right">Pendapatan</th>
++                    <th class="px-4 py-3 text-right">Komisi</th>
++                </tr>
++            </thead>
++            <tbody class="divide-y divide-gray-100">
++                @forelse ($rows as $row)
++                    <tr>
++                        <td class="px-4 py-3">
++                            <div class="font-medium text-gray-900">{{ $row['product']->title }}</div>
++                            <div class="text-xs text-gray-500 capitalize">{{ $row['product']->type }}</div>
++                        </td>
++                        <td class="px-4 py-3 text-right">{{ number_format($row['sold']) }}</td>
++                        <td class="px-4 py-3 text-right font-semibold">{{ formatRupiah($row['revenue']) }}</td>
++                        <td class="px-4 py-3 text-right text-blue-700">{{ formatRupiah($row['commission']) }}</td>
++                    </tr>
++                @empty
++                    <tr>
++                        <td colspan="4" class="px-4 py-6 text-center text-sm text-gray-500">Belum ada produk untuk dilaporkan.</td>
++                    </tr>
++                @endforelse
++            </tbody>
++            <tfoot class="bg-gray-50 font-semibold">
++                <tr>
++                    <td class="px-4 py-3">Total</td>
++                    <td class="px-4 py-3 text-right">{{ number_format($totals['sold']) }}</td>
++                    <td class="px-4 py-3 text-right">{{ formatRupiah($totals['revenue']) }}</td>
++                    <td class="px-4 py-3 text-right text-blue-700">{{ formatRupiah($totals['commission']) }}</td>
++                </tr>
++            </tfoot>
++        </table>
++    </div>
++@endsection
+diff --git a/resources/views/admin/withdrawals.blade.php b/resources/views/admin/withdrawals.blade.php
+index a55c424..7842473 100644
+--- a/resources/views/admin/withdrawals.blade.php
++++ b/resources/views/admin/withdrawals.blade.php
+@@ -3,9 +3,112 @@
+ @section('title', 'Pencairan')
+ 
+ @section('content')
+-    <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
+-        <h2 class="text-lg font-semibold text-gray-900">Pencairan</h2>
+-        <p class="mt-2 text-sm text-gray-500">Permintaan pencairan saldo member: approve/reject &amp; catatan admin akan tampil di sini.</p>
+-        <p class="mt-2 text-xs text-gray-400">(Placeholder — <code>Admin\WithdrawalController</code>.)</p>
++    <header class="mb-6">
++        <h1 class="text-2xl font-bold text-gray-900">Pencairan</h1>
++        <p class="mt-1 text-sm text-gray-600">Setujui atau tolak permintaan pencairan saldo komisi member.</p>
++    </header>
++
++    @if (session('status'))
++        <div class="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">{{ session('status') }}</div>
++    @endif
++    @if (session('error'))
++        <div class="mb-4 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">{{ session('error') }}</div>
++    @endif
++
++    @php
++        $tabs = [
++            'all' => ['Semua', $counts['all']],
++            'pending' => ['Pending', $counts['pending']],
++            'approved' => ['Disetujui', $counts['approved']],
++            'rejected' => ['Ditolak', $counts['rejected']],
++        ];
++    @endphp
++    <div class="mb-4 flex gap-2 border-b border-gray-200">
++        @foreach ($tabs as $key => [$label, $count])
++            <a href="{{ route('admin.withdrawals.index', ['filter' => $key]) }}"
++               class="px-4 py-2 text-sm font-medium border-b-2 -mb-px {{ $filter === $key ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-600 hover:text-gray-900' }}">
++                {{ $label }}
++                <span class="ml-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{{ $count }}</span>
++            </a>
++        @endforeach
+     </div>
++
++    @if ($withdrawals->total() === 0)
++        <div class="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-gray-500">
++            Tidak ada pencairan untuk filter ini.
++        </div>
++    @else
++        <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
++            <table class="min-w-full divide-y divide-gray-200 text-sm">
++                <thead class="bg-gray-50">
++                    <tr class="text-left text-xs uppercase tracking-wide text-gray-500">
++                        <th class="px-4 py-3">Member</th>
++                        <th class="px-4 py-3">Jumlah</th>
++                        <th class="px-4 py-3">Bank Tujuan</th>
++                        <th class="px-4 py-3">Status</th>
++                        <th class="px-4 py-3">Tanggal</th>
++                        <th class="px-4 py-3 text-right">Aksi</th>
++                    </tr>
++                </thead>
++                <tbody class="divide-y divide-gray-100">
++                    @foreach ($withdrawals as $w)
++                        <tr>
++                            <td class="px-4 py-3">
++                                {{ $w->user?->name ?? '-' }}<br>
++                                <span class="text-xs text-gray-500">{{ $w->user?->email ?? '' }}</span>
++                            </td>
++                            <td class="px-4 py-3 font-semibold">{{ formatRupiah($w->amount) }}</td>
++                            <td class="px-4 py-3">
++                                <div>{{ $w->bank_name }}</div>
++                                <div class="text-xs text-gray-500">{{ $w->account_number }} a.n. {{ $w->account_name }}</div>
++                            </td>
++                            <td class="px-4 py-3">
++                                @if ($w->status === 'approved')
++                                    <span class="inline-flex rounded-full bg-green-100 text-green-800 text-xs font-semibold px-2 py-0.5">Disetujui</span>
++                                @elseif ($w->status === 'rejected')
++                                    <span class="inline-flex rounded-full bg-red-100 text-red-800 text-xs font-semibold px-2 py-0.5">Ditolak</span>
++                                @else
++                                    <span class="inline-flex rounded-full bg-yellow-100 text-yellow-800 text-xs font-semibold px-2 py-0.5">Pending</span>
++                                @endif
++                                @if ($w->admin_note)
++                                    <div class="mt-1 text-xs text-gray-500">{{ $w->admin_note }}</div>
++                                @endif
++                            </td>
++                            <td class="px-4 py-3 text-xs text-gray-600">{{ $w->created_at->format('d M Y H:i') }}</td>
++                            <td class="px-4 py-3 text-right">
++                                @if ($w->status === 'pending')
++                                    <form method="POST" action="{{ route('admin.withdrawals.update', $w->id) }}"
++                                          class="inline-flex items-center gap-1"
++                                          onsubmit="return confirm('Setujui pencairan ini? Saldo member akan dipotong sebesar jumlah pencairan.');">
++                                        @csrf
++                                        <input type="hidden" name="action" value="approve">
++                                        <button type="submit" class="rounded-md bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700">Setujui</button>
++                                    </form>
++                                    <form method="POST" action="{{ route('admin.withdrawals.update', $w->id) }}"
++                                          class="inline-flex items-center gap-1 ml-1"
++                                          onsubmit="return rejectWithdrawal(this);">
++                                        @csrf
++                                        <input type="hidden" name="action" value="reject">
++                                        <input type="hidden" name="admin_note" value="">
++                                        <button type="submit" class="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700">Tolak</button>
++                                    </form>
++                                @endif
++                            </td>
++                        </tr>
++                    @endforeach
++                </tbody>
++            </table>
++        </div>
++
++        <div class="mt-6">{{ $withdrawals->onEachSide(1)->links() }}</div>
++    @endif
++
++    <script>
++        function rejectWithdrawal(form) {
++            const note = window.prompt('Alasan menolak pencairan ini? (opsional)');
++            if (note === null) return false;
++            form.querySelector('input[name=admin_note]').value = note;
++            return true;
++        }
++    </script>
+ @endsection
+diff --git a/resources/views/emails/commission-earned.blade.php b/resources/views/emails/commission-earned.blade.php
+new file mode 100644
+index 0000000..268dcd3
+--- /dev/null
++++ b/resources/views/emails/commission-earned.blade.php
+@@ -0,0 +1,21 @@
++<x-mail::message>
++# Komisi Masuk
++
++Hai **{{ $earner->name }}**,
++
++Selamat! Kamu baru saja mendapatkan komisi afiliasi.
++
++- **Produk Terjual:** {{ $product?->title ?? '-' }}
++- **Jumlah Komisi:** {{ formatRupiah($commission->amount) }}
++- **Level:** {{ $commission->level }}
++- **Saldo Sekarang:** {{ formatRupiah($balance) }}
++
++<x-mail::button :url="url('/afiliasi')">
++Lihat Dashboard Afiliasi
++</x-mail::button>
++
++Terus semangat membagikan link referral kamu!
++
++Salam,<br>
++{{ config('app.name') }}
++</x-mail::message>
+diff --git a/resources/views/emails/course-completed.blade.php b/resources/views/emails/course-completed.blade.php
+new file mode 100644
+index 0000000..d03c878
+--- /dev/null
++++ b/resources/views/emails/course-completed.blade.php
+@@ -0,0 +1,18 @@
++<x-mail::message>
++# Selamat, {{ $user->name }}!
++
++Kamu telah **menyelesaikan 100%** materi dari produk berikut:
++
++**{{ $product->title }}**
++
++Pencapaian luar biasa! Sekarang kamu bisa mengunduh sertifikat resmi sebagai bukti penyelesaianmu.
++
++<x-mail::button :url="url('/sertifikat/'.$product->id)">
++Unduh Sertifikat
++</x-mail::button>
++
++Teruslah belajar dan kembangkan keterampilan kamu di kelas-kelas berikutnya.
++
++Salam hangat,<br>
++{{ config('app.name') }}
++</x-mail::message>
+diff --git a/resources/views/emails/order-confirmed.blade.php b/resources/views/emails/order-confirmed.blade.php
+new file mode 100644
+index 0000000..e438be6
+--- /dev/null
++++ b/resources/views/emails/order-confirmed.blade.php
+@@ -0,0 +1,20 @@
++<x-mail::message>
++# Pembelian Berhasil
++
++Hai **{{ $user->name }}**,
++
++Terima kasih! Pembayaran kamu untuk produk berikut sudah kami terima dan akses materi sudah aktif.
++
++- **Produk:** {{ $product->title }}
++- **Harga:** {{ formatRupiah($order->amount) }}
++- **Order ID:** {{ $order->midtrans_order_id }}
++
++<x-mail::button :url="url('/belajar/'.$product->slug)">
++Akses Materi Sekarang
++</x-mail::button>
++
++Selamat belajar dan semoga sukses!
++
++Salam,<br>
++{{ config('app.name') }}
++</x-mail::message>
+diff --git a/resources/views/emails/withdrawal-processed.blade.php b/resources/views/emails/withdrawal-processed.blade.php
+new file mode 100644
+index 0000000..4351b2f
+--- /dev/null
++++ b/resources/views/emails/withdrawal-processed.blade.php
+@@ -0,0 +1,29 @@
++<x-mail::message>
++# Update Pencairan Dana
++
++Hai **{{ $user->name }}**,
++
++Permintaan pencairan dana kamu telah diproses oleh admin.
++
++- **Status:** {{ ucfirst($withdrawal->status) }}
++- **Jumlah:** {{ formatRupiah($withdrawal->amount) }}
++- **Bank Tujuan:** {{ $withdrawal->bank_name }} — {{ $withdrawal->account_number }} a.n. {{ $withdrawal->account_name }}
++
++@if (filled($withdrawal->admin_note))
++**Catatan Admin:**
++{{ $withdrawal->admin_note }}
++@endif
++
++@if ($withdrawal->status === 'approved')
++Dana akan ditransfer ke rekening kamu dalam 1x24 jam kerja.
++@elseif ($withdrawal->status === 'rejected')
++Saldo kamu tidak dipotong dan kamu bisa mengajukan pencairan kembali setelah memperbaiki catatan di atas.
++@endif
++
++<x-mail::button :url="url('/saldo')">
++Lihat Riwayat Pencairan
++</x-mail::button>
++
++Salam,<br>
++{{ config('app.name') }}
++</x-mail::message>
+diff --git a/resources/views/layouts/admin.blade.php b/resources/views/layouts/admin.blade.php
+index 08e37e3..5d5fa98 100644
+--- a/resources/views/layouts/admin.blade.php
++++ b/resources/views/layouts/admin.blade.php
+@@ -36,11 +36,11 @@ class="fixed inset-y-0 left-0 z-40 w-64 transform bg-gray-900 text-gray-100 tran
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l9-9 9 9M5 10v10h4v-6h6v6h4V10"/></svg>
+                     Dashboard Admin
+                 </a>
+-                <a href="{{ route('admin.products') }}" class="{{ $adminLink('admin.products', '') }}">
++                <a href="{{ route('admin.products') }}" class="{{ $adminLink('admin.products*', '') }}">
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0v10l-8 4m8-14L12 11m0 0L4 7m8 4v10"/></svg>
+                     Kelola Produk
+                 </a>
+-                <a href="{{ route('admin.members') }}" class="{{ $adminLink('admin.members', '') }}">
++                <a href="{{ route('admin.members.index') }}" class="{{ $adminLink('admin.members.*', '') }}">
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-5a4 4 0 11-8 0 4 4 0 018 0zm6 0a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                     Kelola Member
+                 </a>
+@@ -52,10 +52,14 @@ class="fixed inset-y-0 left-0 z-40 w-64 transform bg-gray-900 text-gray-100 tran
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V6m0 12v-2m9-4a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                     Komisi
+                 </a>
+-                <a href="{{ route('admin.withdrawals') }}" class="{{ $adminLink('admin.withdrawals', '') }}">
++                <a href="{{ route('admin.withdrawals.index') }}" class="{{ $adminLink('admin.withdrawals.*', '') }}">
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h2m4 0h4M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z"/></svg>
+                     Pencairan
+                 </a>
++                <a href="{{ route('admin.reports') }}" class="{{ $adminLink('admin.reports', '') }}">
++                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-6a2 2 0 012-2h2a2 2 0 012 2v6m4 0H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2z"/></svg>
++                    Laporan
++                </a>
+                 <a href="{{ route('admin.settings.index') }}" class="{{ $adminLink('admin.settings.*', '') }}">
+                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317a1.724 1.724 0 013.35 0c.21.79 1.094 1.197 1.84.83a1.724 1.724 0 012.37 2.37c-.367.745.04 1.629.83 1.84a1.724 1.724 0 010 3.35c-.79.21-1.197 1.094-.83 1.84a1.724 1.724 0 01-2.37 2.37c-.745-.367-1.629.04-1.84.83a1.724 1.724 0 01-3.35 0c-.21-.79-1.094-1.197-1.84-.83a1.724 1.724 0 01-2.37-2.37c.367-.745-.04-1.629-.83-1.84a1.724 1.724 0 010-3.35c.79-.21 1.197-1.094.83-1.84a1.724 1.724 0 012.37-2.37c.745.367 1.629-.04 1.84-.83z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                     Pengaturan
+diff --git a/routes/console.php b/routes/console.php
+index 3c9adf1..8c5027b 100644
+--- a/routes/console.php
++++ b/routes/console.php
+@@ -2,7 +2,10 @@
+ 
+ use Illuminate\Foundation\Inspiring;
+ use Illuminate\Support\Facades\Artisan;
++use Illuminate\Support\Facades\Schedule;
+ 
+ Artisan::command('inspire', function () {
+     $this->comment(Inspiring::quote());
+ })->purpose('Display an inspiring quote');
++
++Schedule::command('queue:work --stop-when-empty')->everyMinute()->withoutOverlapping();
+diff --git a/routes/web.php b/routes/web.php
+index efca320..024615e 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -1,7 +1,12 @@
+ <?php
+ 
++use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
++use App\Http\Controllers\Admin\MemberController as AdminMemberController;
+ use App\Http\Controllers\Admin\OrderController as AdminOrderController;
++use App\Http\Controllers\Admin\ProductController as AdminProductController;
++use App\Http\Controllers\Admin\ReportController as AdminReportController;
+ use App\Http\Controllers\Admin\SettingController as AdminSettingController;
++use App\Http\Controllers\Admin\WithdrawalController as AdminWithdrawalController;
+ use App\Http\Controllers\AffiliateController;
+ use App\Http\Controllers\CertificateController;
+ use App\Http\Controllers\CheckoutController;
+@@ -95,18 +100,63 @@
+     ->prefix('admin')
+     ->name('admin.')
+     ->group(function () {
+-        Route::get('/', fn () => view('admin.dashboard'))->name('dashboard');
+-        Route::get('/produk', fn () => view('admin.products'))->name('products');
+-        Route::get('/member', fn () => view('admin.members'))->name('members');
++        Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
++
++        // Produk
++        Route::get('/produk', [AdminProductController::class, 'index'])->name('products');
++        Route::get('/produk/baru', [AdminProductController::class, 'create'])->name('products.create');
++        Route::post('/produk', [AdminProductController::class, 'store'])->name('products.store');
++        Route::get('/produk/{id}/edit', [AdminProductController::class, 'edit'])
++            ->whereNumber('id')->name('products.edit');
++        Route::put('/produk/{id}', [AdminProductController::class, 'update'])
++            ->whereNumber('id')->name('products.update');
++        Route::delete('/produk/{id}', [AdminProductController::class, 'destroy'])
++            ->whereNumber('id')->name('products.destroy');
++
++        // Section
++        Route::post('/produk/{id}/sections', [AdminProductController::class, 'storeSection'])
++            ->whereNumber('id')->name('products.sections.store');
++        Route::put('/produk/{id}/sections/{sectionId}', [AdminProductController::class, 'updateSection'])
++            ->whereNumber(['id', 'sectionId'])->name('products.sections.update');
++        Route::delete('/produk/{id}/sections/{sectionId}', [AdminProductController::class, 'destroySection'])
++            ->whereNumber(['id', 'sectionId'])->name('products.sections.destroy');
++        Route::post('/produk/{id}/sections/reorder', [AdminProductController::class, 'reorderSections'])
++            ->whereNumber('id')->name('products.sections.reorder');
++
++        // Lesson
++        Route::post('/produk/{id}/sections/{sectionId}/lessons', [AdminProductController::class, 'storeLesson'])
++            ->whereNumber(['id', 'sectionId'])->name('products.sections.lessons.store');
++        Route::put('/produk/{id}/sections/{sectionId}/lessons/{lessonId}', [AdminProductController::class, 'updateLesson'])
++            ->whereNumber(['id', 'sectionId', 'lessonId'])->name('products.sections.lessons.update');
++        Route::delete('/produk/{id}/sections/{sectionId}/lessons/{lessonId}', [AdminProductController::class, 'destroyLesson'])
++            ->whereNumber(['id', 'sectionId', 'lessonId'])->name('products.sections.lessons.destroy');
++        Route::post('/produk/{id}/sections/{sectionId}/lessons/reorder', [AdminProductController::class, 'reorderLessons'])
++            ->whereNumber(['id', 'sectionId'])->name('products.sections.lessons.reorder');
++
++        // Member
++        Route::get('/member', [AdminMemberController::class, 'index'])->name('members.index');
++        Route::get('/member/{id}', [AdminMemberController::class, 'show'])
++            ->whereNumber('id')->name('members.show');
++
++        // Komisi (placeholder kept for sidebar compatibility)
+         Route::get('/komisi', fn () => view('admin.commissions'))->name('commissions');
+-        Route::get('/pencairan', fn () => view('admin.withdrawals'))->name('withdrawals');
+ 
++        // Pencairan
++        Route::get('/pencairan', [AdminWithdrawalController::class, 'index'])->name('withdrawals.index');
++        Route::post('/pencairan/{id}', [AdminWithdrawalController::class, 'update'])
++            ->whereNumber('id')->name('withdrawals.update');
++
++        // Laporan
++        Route::get('/laporan', [AdminReportController::class, 'index'])->name('reports');
++
++        // Pesanan
+         Route::get('/pesanan', [AdminOrderController::class, 'index'])->name('orders');
+         Route::post('/pesanan/{id}/konfirmasi', [AdminOrderController::class, 'konfirmasi'])
+             ->whereNumber('id')->name('orders.konfirmasi');
+         Route::post('/pesanan/{id}/tolak', [AdminOrderController::class, 'tolak'])
+             ->whereNumber('id')->name('orders.tolak');
+ 
++        // Pengaturan
+         Route::get('/pengaturan', [AdminSettingController::class, 'index'])->name('settings.index');
+         Route::post('/pengaturan', [AdminSettingController::class, 'update'])->name('settings.update');
+     });
+-- 
+2.34.1
+

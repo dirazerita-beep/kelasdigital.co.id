@@ -16,6 +16,7 @@ class MemberProductController extends Controller
         $ownedIds = UserProduct::where('user_id', $userId)->pluck('product_id');
         $products = Product::query()
             ->whereIn('id', $ownedIds)
+            ->with('sections.lessons:id,section_id')
             ->orderBy('title')
             ->get();
 
@@ -32,7 +33,7 @@ class MemberProductController extends Controller
 
     private function productProgress(Product $product, int $userId): array
     {
-        $lessonIds = $product->sections()->with('lessons:id,section_id')->get()
+        $lessonIds = $product->sections
             ->flatMap(fn ($s) => $s->lessons->pluck('id'))
             ->all();
 

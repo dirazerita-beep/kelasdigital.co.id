@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Setting;
-use App\Models\User;
 use App\Models\UserProduct;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -136,6 +135,7 @@ class CheckoutController extends Controller
             $order->whatsapp_sent_at = now();
             $order->save();
         }
+
         return back();
     }
 }

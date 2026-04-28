@@ -2,10 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\StoreWithdrawalRequest;
 use App\Models\Withdrawal;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
 
 class WithdrawalController extends Controller
 {
@@ -23,20 +23,10 @@ class WithdrawalController extends Controller
         ]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(StoreWithdrawalRequest $request): RedirectResponse
     {
         $user = $request->user();
-        $balance = (float) $user->balance;
-
-        $data = $request->validate([
-            'amount' => ['required', 'numeric', 'min:50000', 'max:'.$balance],
-            'bank_name' => ['required', 'string', 'max:100'],
-            'account_number' => ['required', 'string', 'max:50'],
-            'account_name' => ['required', 'string', 'max:100'],
-        ], [
-            'amount.min' => 'Jumlah pencairan minimal Rp 50.000.',
-            'amount.max' => 'Jumlah pencairan tidak boleh melebihi saldo Anda.',
-        ]);
+        $data = $request->validated();
 
         Withdrawal::create([
             'user_id' => $user->id,

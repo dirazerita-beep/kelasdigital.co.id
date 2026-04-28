@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Commission;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\User;
 use App\Models\UserProduct;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\DB;
@@ -52,7 +53,7 @@ class AffiliateController extends Controller
             ->get();
 
         $userIds = $leaderboard->pluck('earner_id')->all();
-        $userNames = \App\Models\User::whereIn('id', $userIds)->pluck('name', 'id');
+        $userNames = User::whereIn('id', $userIds)->pluck('name', 'id');
         foreach ($leaderboard as $row) {
             $row->name = $userNames[$row->earner_id] ?? 'Pengguna';
         }

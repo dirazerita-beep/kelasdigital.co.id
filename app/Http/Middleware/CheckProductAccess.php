@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\Product;
+use App\Models\ProductLesson;
 use App\Models\UserProduct;
 use Closure;
 use Illuminate\Http\Request;
@@ -13,11 +14,15 @@ class CheckProductAccess
     /**
      * Handle an incoming request.
      *
-     * Expects a `product` route parameter (Product model or id/slug).
+     * Resolves the product from one of these route parameters:
+     *   - `product` (Product model or id/slug)
+     *   - `slug` (Product slug)
+     *   - `lesson_id` (resolved via ProductLesson → section → product)
+     *
      * Redirects to the product page with a flash error if the
      * authenticated user does not own the product yet.
      *
-     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
+     * @param  Closure(Request): (Response)  $next
      */
     public function handle(Request $request, Closure $next): Response
     {
@@ -28,11 +33,12 @@ class CheckProductAccess
         }
 
         $product = $request->route('product') ?? $request->route('slug');
+        $lessonId = $request->route('lesson_id');
 
         if ($product instanceof Product) {
             $productId = $product->id;
             $productSlug = $product->slug;
-        } else {
+        } elseif ($product !== null) {
             $resolved = is_numeric($product)
                 ? Product::find($product)
                 : Product::where('slug', $product)->first();
@@ -43,6 +49,17 @@ class CheckProductAccess
 
             $productId = $resolved->id;
             $productSlug = $resolved->slug;
+        } elseif ($lessonId !== null) {
+            $lesson = ProductLesson::with('section.product')->find($lessonId);
+
+            if (! $lesson || ! $lesson->section || ! $lesson->section->product) {
+                abort(404);
+            }
+
+            $productId = $lesson->section->product->id;
+            $productSlug = $lesson->section->product->slug;
+        } else {
+            abort(404);
         }
 
         $owns = UserProduct::where('user_id', $user->id)

@@ -1,0 +1,1471 @@
+From bcaa8f942447179903e31595207483c5b471ad95 Mon Sep 17 00:00:00 2001
+From: "tugas.x1" <tugas.x1@gmail.com>
+Date: Tue, 28 Apr 2026 06:26:19 +0000
+Subject: [PATCH 2/2] feat(step13-15): security hardening + shared hosting
+ deploy + e2e tests
+
+Step 13 - Keamanan & Validasi:
+- Tambah middleware product.access ke route /download/{lesson_id}
+- Extend CheckProductAccess agar bisa resolve product dari lesson_id
+- Buat StoreProductRequest + StoreWithdrawalRequest (Form Request validation)
+- Audit eager loading: dashboard & produk-saya pakai with('sections.lessons')
+- Fix: ReferralController hanya simpan session jika referrer SUDAH beli produk
+
+Step 14 - Persiapan Deploy Shared Hosting:
+- Buat public/index.shared.php (front controller untuk cPanel layout)
+- Update public/.htaccess (security + cache + gzip)
+- Buat DEPLOY.md panduan lengkap deploy ke cPanel
+- Buat database/seeders/AdminSeeder.php (admin@kelasdigital.co.id)
+- Verify php artisan optimize berjalan tanpa error
+
+Step 15 - Testing Menyeluruh:
+- tests/Feature/Step15FlowsTest.php: 11 tests covering 10 skenario user
+  (register/login, manual purchase + admin confirm, lesson completion +
+  certificate, affiliate link validity, level-1 + level-2 commission cascade,
+  withdrawal approve, access control, admin product creation + thumbnail)
+- Enable sqlite :memory: di phpunit.xml + RefreshDatabase di ExampleTest
+- All tests pass: 36/36 (125 assertions)
+
+Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+---
+ DEPLOY.md                                     | 297 ++++++++++++
+ .../Controllers/Admin/ProductController.php   |  27 +-
+ app/Http/Controllers/AffiliateController.php  |   3 +-
+ app/Http/Controllers/CheckoutController.php   |   2 +-
+ app/Http/Controllers/DashboardController.php  |   3 +-
+ .../Controllers/MemberProductController.php   |   3 +-
+ app/Http/Controllers/ReferralController.php   |  30 +-
+ app/Http/Controllers/WithdrawalController.php |  16 +-
+ app/Http/Middleware/CheckProductAccess.php    |  23 +-
+ app/Http/Middleware/CheckRole.php             |   2 +-
+ app/Http/Requests/StoreProductRequest.php     |  60 +++
+ app/Http/Requests/StoreWithdrawalRequest.php  |  39 ++
+ database/seeders/AdminSeeder.php              |  34 ++
+ phpunit.xml                                   |   4 +-
+ public/.htaccess                              |  42 ++
+ public/index.shared.php                       |  75 +++
+ routes/web.php                                |   1 +
+ tests/Feature/ExampleTest.php                 |   4 +-
+ tests/Feature/Step15FlowsTest.php             | 450 ++++++++++++++++++
+ 19 files changed, 1062 insertions(+), 53 deletions(-)
+ create mode 100644 DEPLOY.md
+ create mode 100644 app/Http/Requests/StoreProductRequest.php
+ create mode 100644 app/Http/Requests/StoreWithdrawalRequest.php
+ create mode 100644 database/seeders/AdminSeeder.php
+ create mode 100644 public/index.shared.php
+ create mode 100644 tests/Feature/Step15FlowsTest.php
+
+diff --git a/DEPLOY.md b/DEPLOY.md
+new file mode 100644
+index 0000000..50dc9f7
+--- /dev/null
++++ b/DEPLOY.md
+@@ -0,0 +1,297 @@
++# Panduan Deploy ke Shared Hosting (cPanel)
++
++Dokumen ini menjelaskan cara deploy aplikasi **KelasDigital** ke shared hosting cPanel.
++
++> Asumsi: hosting mendukung **PHP 8.2+**, **MySQL 8 / MariaDB 10.4+**, **mod_rewrite**, dan akses **SSH** (cPanel Terminal). Tanpa SSH masih bisa, tapi beberapa perintah harus dijalankan via cPanel UI.
++
++---
++
++## 1. Struktur folder di cPanel
++
++```
++/home/<cpanel-user>/
++├── laravel/                  ← seluruh source aplikasi (DI LUAR public_html!)
++│   ├── app/
++│   ├── bootstrap/
++│   ├── config/
++│   ├── database/
++│   ├── public/               ← TIDAK dipakai di production (isinya sudah dipindah)
++│   ├── resources/
++│   ├── routes/
++│   ├── storage/
++│   ├── vendor/
++│   ├── .env
++│   ├── artisan
++│   └── composer.json
++└── public_html/              ← document root (apa yang diakses publik)
++    ├── index.php             ← copy dari laravel/public/index.shared.php (sudah di-rename)
++    ├── .htaccess             ← copy dari laravel/public/.htaccess
++    ├── favicon.ico
++    ├── robots.txt
++    └── storage/              ← symlink ke ../laravel/storage/app/public
++```
++
++**Kenapa source di luar `public_html`?** Supaya file `.env`, `vendor`, `storage`, dll. tidak bisa diakses langsung dari URL publik.
++
++---
++
++## 2. Persiapan di mesin lokal
++
++```bash
++# Install dependency production (tanpa dev tools)
++composer install --no-dev --optimize-autoloader
++
++# Build asset (jika repo pakai Vite)
++# npm ci && npm run build
++
++# Buat archive untuk diupload
++tar -czf kelasdigital.tar.gz \
++  --exclude='node_modules' \
++  --exclude='tests' \
++  --exclude='.git' \
++  --exclude='storage/logs/*' \
++  --exclude='storage/framework/cache/data/*' \
++  --exclude='storage/framework/sessions/*' \
++  --exclude='storage/framework/views/*' \
++  .
++```
++
++---
++
++## 3. Upload & extract di cPanel
++
++1. Login ke **cPanel → File Manager**.
++2. Upload `kelasdigital.tar.gz` ke `/home/<cpanel-user>/`.
++3. Klik kanan archive → **Extract** ke folder `laravel/` (buat folder baru kalau belum ada).
++4. Pastikan struktur jadi `/home/<cpanel-user>/laravel/app/`, `/home/<cpanel-user>/laravel/vendor/`, dst.
++
++---
++
++## 4. Pindahkan isi `public/` ke `public_html/`
++
++Via **File Manager** atau **cPanel Terminal**:
++
++```bash
++cd ~/laravel/public
++cp -R . ~/public_html/
++```
++
++Lalu **rename** front controller untuk shared hosting:
++
++```bash
++cd ~/public_html
++mv index.shared.php index.php   # replace index.php standar
++```
++
++> Kalau perlu, edit `~/public_html/index.php` dan sesuaikan baris:
++> ```php
++> $laravelPath = __DIR__.'/../laravel';
++> ```
++> kalau folder source kamu bukan bernama `laravel`.
++
++---
++
++## 5. Buat symlink untuk storage publik (thumbnail, sertifikat, dll)
++
++Via **cPanel Terminal**:
++
++```bash
++cd ~/public_html
++ln -s ../laravel/storage/app/public storage
++```
++
++Atau via **File Manager** → New → Symbolic Link (target: `../laravel/storage/app/public`, link name: `storage`).
++
++> Ini setara dengan `php artisan storage:link` di environment standar.
++
++---
++
++## 6. Setup `.env`
++
++Copy `.env.example` jadi `.env`, lalu edit:
++
++```bash
++cd ~/laravel
++cp .env.example .env
++nano .env
++```
++
++Isi minimal yang **WAJIB**:
++
++```
++APP_NAME="KelasDigital"
++APP_ENV=production
++APP_KEY=                      # akan diisi otomatis di langkah berikutnya
++APP_DEBUG=false
++APP_URL=https://kelasdigital.co.id
++
++DB_CONNECTION=mysql
++DB_HOST=localhost
++DB_PORT=3306
++DB_DATABASE=<nama_db_cpanel>
++DB_USERNAME=<user_db_cpanel>
++DB_PASSWORD=<password_db>
++
++MAIL_MAILER=smtp
++MAIL_HOST=mail.kelasdigital.co.id
++MAIL_PORT=465
++MAIL_USERNAME=no-reply@kelasdigital.co.id
++MAIL_PASSWORD=<password_email>
++MAIL_ENCRYPTION=ssl
++MAIL_FROM_ADDRESS=no-reply@kelasdigital.co.id
++MAIL_FROM_NAME="KelasDigital"
++
++# Midtrans (opsional, kosongkan jika hanya pakai manual transfer)
++MIDTRANS_SERVER_KEY=
++MIDTRANS_CLIENT_KEY=
++MIDTRANS_IS_PRODUCTION=true
++
++QUEUE_CONNECTION=database     # default; bisa di-upgrade ke redis
++```
++
++Generate APP_KEY:
++
++```bash
++php artisan key:generate --force
++```
++
++---
++
++## 7. Setup database
++
++1. Di **cPanel → MySQL Databases**, buat database baru + user, kasih user `ALL PRIVILEGES`.
++2. Update `.env` dengan kredensial tersebut.
++3. Jalankan migrasi + seeder admin:
++
++   ```bash
++   cd ~/laravel
++   php artisan migrate --force
++   php artisan db:seed --class=AdminSeeder
++   ```
++
++   AdminSeeder membuat akun:
++   - Email: `admin@kelasdigital.co.id`
++   - Password: `GantiPasswordIni123!`
++
++   **WAJIB ganti password ini setelah login pertama kali** (Profile → Update Password).
++
++---
++
++## 8. Set permission folder
++
++```bash
++cd ~/laravel
++chmod -R 775 storage bootstrap/cache
++# Pastikan owner = user cPanel (biasanya sudah otomatis)
++```
++
++---
++
++## 9. Cache config & route
++
++```bash
++cd ~/laravel
++php artisan config:cache
++php artisan route:cache
++php artisan view:cache
++php artisan optimize
++```
++
++> Setiap kali `.env` atau file di `config/` berubah, jalankan `php artisan config:clear && php artisan config:cache` lagi.
++
++---
++
++## 10. Setup queue worker (untuk email notifikasi)
++
++Aplikasi pakai queue untuk kirim email. Di shared hosting cPanel, gunakan **Cron Jobs** untuk jalankan scheduler tiap menit:
++
++**cPanel → Cron Jobs → Add Cron Job**
++
++- **Common Settings**: `Once Per Minute (* * * * *)`
++- **Command**:
++  ```
++  cd /home/<cpanel-user>/laravel && php artisan schedule:run >> /dev/null 2>&1
++  ```
++
++Scheduler akan otomatis menjalankan `queue:work --stop-when-empty` setiap menit (sudah dikonfigurasi di `routes/console.php`).
++
++---
++
++## 11. Konfigurasi domain
++
++Di **cPanel → Domains**, pastikan domain `kelasdigital.co.id` mengarah ke `/home/<cpanel-user>/public_html/`.
++
++Aktifkan **SSL** via **Let's Encrypt** (gratis di cPanel modern), lalu uncomment baris HTTPS redirect di `public_html/.htaccess`:
++
++```apache
++RewriteCond %{HTTPS} off
++RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
++```
++
++---
++
++## 12. Konfigurasi Midtrans webhook (jika dipakai)
++
++Login ke **dashboard Midtrans → Settings → Configuration → Payment Notification URL**:
++
++```
++https://kelasdigital.co.id/payment/notification
++```
++
++(Route ini sudah di-exclude dari CSRF di `bootstrap/app.php`.)
++
++---
++
++## 13. Verifikasi deploy
++
++1. Akses `https://kelasdigital.co.id/` → harus tampil halaman utama.
++2. Akses `https://kelasdigital.co.id/admin` → redirect ke login.
++3. Login pakai `admin@kelasdigital.co.id` / `GantiPasswordIni123!`.
++4. **Langsung ganti password** di `/profile`.
++5. Buat 1 produk uji + thumbnail → cek thumbnail muncul (jika tidak muncul, symlink storage langkah 5 belum benar).
++6. Cek log error di `~/laravel/storage/logs/laravel.log` jika ada masalah.
++
++---
++
++## 14. Update aplikasi (deploy versi baru)
++
++```bash
++cd ~/laravel
++# Backup database dulu via cPanel → Backup
++# Backup .env
++cp .env .env.backup
++
++# Upload archive baru, extract, replace folder
++# (atau pakai git pull kalau hosting punya git)
++
++php artisan down
++php artisan migrate --force
++php artisan config:cache
++php artisan route:cache
++php artisan view:cache
++php artisan optimize
++php artisan up
++```
++
++---
++
++## Troubleshooting
++
++| Masalah | Penyebab umum | Solusi |
++|---|---|---|
++| 500 Internal Server Error | Path di `index.php` salah / permission storage | Cek `storage/logs/laravel.log`; pastikan `chmod 775` |
++| Asset CSS/JS tidak load | Vite belum di-build | `npm run build` di lokal, upload ulang `public/build/` |
++| Thumbnail tidak muncul | Symlink storage belum dibuat | `ln -s ../laravel/storage/app/public storage` di `public_html/` |
++| Email tidak terkirim | Cron schedule belum aktif / SMTP salah | Cek Cron Jobs aktif; test `php artisan tinker` → `Mail::raw(...)` |
++| 419 Page Expired | APP_KEY berubah / cache config kotor | `php artisan config:clear && php artisan config:cache` |
++| Login admin pertama kali gagal | AdminSeeder belum dijalankan | `php artisan db:seed --class=AdminSeeder` |
++
++---
++
++## Catatan Keamanan
++
++- File `.env` **TIDAK BOLEH** ditaruh di `public_html/`.
++- Pastikan `APP_DEBUG=false` di production.
++- Backup database **berkala** via cPanel → Backup.
++- Aktifkan **2FA** untuk akun cPanel.
++- Monitor `storage/logs/laravel.log` untuk anomali.
+diff --git a/app/Http/Controllers/Admin/ProductController.php b/app/Http/Controllers/Admin/ProductController.php
+index 034db53..8dc7a72 100644
+--- a/app/Http/Controllers/Admin/ProductController.php
++++ b/app/Http/Controllers/Admin/ProductController.php
+@@ -3,6 +3,7 @@
+ namespace App\Http\Controllers\Admin;
+ 
+ use App\Http\Controllers\Controller;
++use App\Http\Requests\StoreProductRequest;
+ use App\Models\Product;
+ use App\Models\ProductLesson;
+ use App\Models\ProductSection;
+@@ -28,9 +29,9 @@ public function create(): View
+         return view('admin.products.create');
+     }
+ 
+-    public function store(Request $request): RedirectResponse
++    public function store(StoreProductRequest $request): RedirectResponse
+     {
+-        $data = $this->validateProduct($request);
++        $data = $request->validated();
+ 
+         $data['thumbnail'] = $this->handleThumbnail($request);
+ 
+@@ -48,11 +49,11 @@ public function edit(int $id): View
+         return view('admin.products.edit', ['product' => $product]);
+     }
+ 
+-    public function update(Request $request, int $id): RedirectResponse
++    public function update(StoreProductRequest $request, int $id): RedirectResponse
+     {
+         $product = Product::findOrFail($id);
+ 
+-        $data = $this->validateProduct($request, $id);
++        $data = $request->validated();
+ 
+         if ($request->hasFile('thumbnail')) {
+             if ($product->thumbnail) {
+@@ -83,24 +84,6 @@ public function destroy(int $id): RedirectResponse
+             ->with('status', 'Produk berhasil dihapus.');
+     }
+ 
+-    /**
+-     * @return array<string, mixed>
+-     */
+-    private function validateProduct(Request $request, ?int $ignoreId = null): array
+-    {
+-        return $request->validate([
+-            'title' => ['required', 'string', 'max:200'],
+-            'slug' => ['required', 'string', 'max:200', 'regex:/^[a-z0-9-]+$/', 'unique:products,slug'.($ignoreId ? ','.$ignoreId : '')],
+-            'description' => ['required', 'string'],
+-            'price' => ['required', 'numeric', 'min:0'],
+-            'type' => ['required', 'in:course,software,mixed'],
+-            'commission_rate' => ['required', 'numeric', 'min:0', 'max:100'],
+-            'preview_youtube_id' => ['nullable', 'string', 'max:50'],
+-            'status' => ['required', 'in:active,draft'],
+-            'thumbnail' => ['nullable', 'image', 'mimes:jpeg,png,webp', 'max:2048'],
+-        ]);
+-    }
+-
+     private function handleThumbnail(Request $request): ?string
+     {
+         if (! $request->hasFile('thumbnail')) {
+diff --git a/app/Http/Controllers/AffiliateController.php b/app/Http/Controllers/AffiliateController.php
+index dcfc8c4..8e7c169 100644
+--- a/app/Http/Controllers/AffiliateController.php
++++ b/app/Http/Controllers/AffiliateController.php
+@@ -5,6 +5,7 @@
+ use App\Models\Commission;
+ use App\Models\Order;
+ use App\Models\Product;
++use App\Models\User;
+ use App\Models\UserProduct;
+ use Illuminate\Contracts\View\View;
+ use Illuminate\Support\Facades\DB;
+@@ -52,7 +53,7 @@ public function dashboard(): View
+             ->get();
+ 
+         $userIds = $leaderboard->pluck('earner_id')->all();
+-        $userNames = \App\Models\User::whereIn('id', $userIds)->pluck('name', 'id');
++        $userNames = User::whereIn('id', $userIds)->pluck('name', 'id');
+         foreach ($leaderboard as $row) {
+             $row->name = $userNames[$row->earner_id] ?? 'Pengguna';
+         }
+diff --git a/app/Http/Controllers/CheckoutController.php b/app/Http/Controllers/CheckoutController.php
+index 0d6a0bb..9048878 100644
+--- a/app/Http/Controllers/CheckoutController.php
++++ b/app/Http/Controllers/CheckoutController.php
+@@ -5,7 +5,6 @@
+ use App\Models\Order;
+ use App\Models\Product;
+ use App\Models\Setting;
+-use App\Models\User;
+ use App\Models\UserProduct;
+ use Illuminate\Http\RedirectResponse;
+ use Illuminate\Http\Request;
+@@ -136,6 +135,7 @@ public function markWhatsappSent(Order $order): RedirectResponse
+             $order->whatsapp_sent_at = now();
+             $order->save();
+         }
++
+         return back();
+     }
+ }
+diff --git a/app/Http/Controllers/DashboardController.php b/app/Http/Controllers/DashboardController.php
+index 8fec0c3..35f9071 100644
+--- a/app/Http/Controllers/DashboardController.php
++++ b/app/Http/Controllers/DashboardController.php
+@@ -21,6 +21,7 @@ public function index(): View
+         $ownedProductIds = UserProduct::where('user_id', $user->id)->pluck('product_id');
+         $recent = Product::query()
+             ->whereIn('id', $ownedProductIds)
++            ->with('sections.lessons:id,section_id')
+             ->orderByDesc('id')
+             ->take(3)
+             ->get();
+@@ -41,7 +42,7 @@ public function index(): View
+ 
+     private function productProgress(Product $product, int $userId): array
+     {
+-        $lessonIds = $product->sections()->with('lessons:id,section_id')->get()
++        $lessonIds = $product->sections
+             ->flatMap(fn ($s) => $s->lessons->pluck('id'))
+             ->all();
+ 
+diff --git a/app/Http/Controllers/MemberProductController.php b/app/Http/Controllers/MemberProductController.php
+index d2209d1..708666e 100644
+--- a/app/Http/Controllers/MemberProductController.php
++++ b/app/Http/Controllers/MemberProductController.php
+@@ -16,6 +16,7 @@ public function index(): View
+         $ownedIds = UserProduct::where('user_id', $userId)->pluck('product_id');
+         $products = Product::query()
+             ->whereIn('id', $ownedIds)
++            ->with('sections.lessons:id,section_id')
+             ->orderBy('title')
+             ->get();
+ 
+@@ -32,7 +33,7 @@ public function index(): View
+ 
+     private function productProgress(Product $product, int $userId): array
+     {
+-        $lessonIds = $product->sections()->with('lessons:id,section_id')->get()
++        $lessonIds = $product->sections
+             ->flatMap(fn ($s) => $s->lessons->pluck('id'))
+             ->all();
+ 
+diff --git a/app/Http/Controllers/ReferralController.php b/app/Http/Controllers/ReferralController.php
+index cd81a4e..54364d8 100644
+--- a/app/Http/Controllers/ReferralController.php
++++ b/app/Http/Controllers/ReferralController.php
+@@ -4,29 +4,45 @@
+ 
+ use App\Models\Product;
+ use App\Models\User;
++use App\Models\UserProduct;
+ use Illuminate\Http\RedirectResponse;
+ 
+ class ReferralController extends Controller
+ {
+     /**
+      * /ref/{user_id}/{product_id}
+-     * Stores referrer in session if both user (member) and product (active) exist.
+-     * Redirects to product detail in either case.
++     *
++     * Menyimpan referrer ke session HANYA jika:
++     *   - User referrer ada dan berperan member.
++     *   - Produk ada dan berstatus aktif.
++     *   - Referrer SUDAH membeli produk tersebut (kepemilikan valid).
++     *
++     * Selalu redirect ke halaman produk agar UX tetap mulus walau link tidak
++     * valid (mis. referrer belum beli).
+      */
+     public function capture(int $user_id, int $product_id): RedirectResponse
+     {
+         $referrer = User::find($user_id);
+         $product = Product::find($product_id);
+ 
+-        if ($referrer && $product && $product->status === 'active') {
+-            session(['referral.product_'.$product->id => $referrer->id]);
+-            return redirect()->route('products.show', $product->slug);
++        if (! $product) {
++            return redirect()->route('products.index');
+         }
+ 
+-        if ($product) {
++        if ($product->status !== 'active') {
+             return redirect()->route('products.show', $product->slug);
+         }
+ 
+-        return redirect()->route('products.index');
++        $isValidReferrer = $referrer
++            && UserProduct::query()
++                ->where('user_id', $referrer->id)
++                ->where('product_id', $product->id)
++                ->exists();
++
++        if ($isValidReferrer) {
++            session(['referral.product_'.$product->id => $referrer->id]);
++        }
++
++        return redirect()->route('products.show', $product->slug);
+     }
+ }
+diff --git a/app/Http/Controllers/WithdrawalController.php b/app/Http/Controllers/WithdrawalController.php
+index 2ae7849..3784158 100644
+--- a/app/Http/Controllers/WithdrawalController.php
++++ b/app/Http/Controllers/WithdrawalController.php
+@@ -2,10 +2,10 @@
+ 
+ namespace App\Http\Controllers;
+ 
++use App\Http\Requests\StoreWithdrawalRequest;
+ use App\Models\Withdrawal;
+ use Illuminate\Contracts\View\View;
+ use Illuminate\Http\RedirectResponse;
+-use Illuminate\Http\Request;
+ 
+ class WithdrawalController extends Controller
+ {
+@@ -23,20 +23,10 @@ public function index(): View
+         ]);
+     }
+ 
+-    public function store(Request $request): RedirectResponse
++    public function store(StoreWithdrawalRequest $request): RedirectResponse
+     {
+         $user = $request->user();
+-        $balance = (float) $user->balance;
+-
+-        $data = $request->validate([
+-            'amount' => ['required', 'numeric', 'min:50000', 'max:'.$balance],
+-            'bank_name' => ['required', 'string', 'max:100'],
+-            'account_number' => ['required', 'string', 'max:50'],
+-            'account_name' => ['required', 'string', 'max:100'],
+-        ], [
+-            'amount.min' => 'Jumlah pencairan minimal Rp 50.000.',
+-            'amount.max' => 'Jumlah pencairan tidak boleh melebihi saldo Anda.',
+-        ]);
++        $data = $request->validated();
+ 
+         Withdrawal::create([
+             'user_id' => $user->id,
+diff --git a/app/Http/Middleware/CheckProductAccess.php b/app/Http/Middleware/CheckProductAccess.php
+index d748df0..4f8b8f9 100644
+--- a/app/Http/Middleware/CheckProductAccess.php
++++ b/app/Http/Middleware/CheckProductAccess.php
+@@ -3,6 +3,7 @@
+ namespace App\Http\Middleware;
+ 
+ use App\Models\Product;
++use App\Models\ProductLesson;
+ use App\Models\UserProduct;
+ use Closure;
+ use Illuminate\Http\Request;
+@@ -13,11 +14,15 @@ class CheckProductAccess
+     /**
+      * Handle an incoming request.
+      *
+-     * Expects a `product` route parameter (Product model or id/slug).
++     * Resolves the product from one of these route parameters:
++     *   - `product` (Product model or id/slug)
++     *   - `slug` (Product slug)
++     *   - `lesson_id` (resolved via ProductLesson → section → product)
++     *
+      * Redirects to the product page with a flash error if the
+      * authenticated user does not own the product yet.
+      *
+-     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
++     * @param  Closure(Request): (Response)  $next
+      */
+     public function handle(Request $request, Closure $next): Response
+     {
+@@ -28,11 +33,12 @@ public function handle(Request $request, Closure $next): Response
+         }
+ 
+         $product = $request->route('product') ?? $request->route('slug');
++        $lessonId = $request->route('lesson_id');
+ 
+         if ($product instanceof Product) {
+             $productId = $product->id;
+             $productSlug = $product->slug;
+-        } else {
++        } elseif ($product !== null) {
+             $resolved = is_numeric($product)
+                 ? Product::find($product)
+                 : Product::where('slug', $product)->first();
+@@ -43,6 +49,17 @@ public function handle(Request $request, Closure $next): Response
+ 
+             $productId = $resolved->id;
+             $productSlug = $resolved->slug;
++        } elseif ($lessonId !== null) {
++            $lesson = ProductLesson::with('section.product')->find($lessonId);
++
++            if (! $lesson || ! $lesson->section || ! $lesson->section->product) {
++                abort(404);
++            }
++
++            $productId = $lesson->section->product->id;
++            $productSlug = $lesson->section->product->slug;
++        } else {
++            abort(404);
+         }
+ 
+         $owns = UserProduct::where('user_id', $user->id)
+diff --git a/app/Http/Middleware/CheckRole.php b/app/Http/Middleware/CheckRole.php
+index 90c3089..104f4cf 100644
+--- a/app/Http/Middleware/CheckRole.php
++++ b/app/Http/Middleware/CheckRole.php
+@@ -13,7 +13,7 @@ class CheckRole
+      *
+      * Usage in routes: `->middleware('role:admin')` or `->middleware('role:admin,member')`.
+      *
+-     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
++     * @param  Closure(Request): (Response)  $next
+      */
+     public function handle(Request $request, Closure $next, string ...$roles): Response
+     {
+diff --git a/app/Http/Requests/StoreProductRequest.php b/app/Http/Requests/StoreProductRequest.php
+new file mode 100644
+index 0000000..bba171d
+--- /dev/null
++++ b/app/Http/Requests/StoreProductRequest.php
+@@ -0,0 +1,60 @@
++<?php
++
++namespace App\Http\Requests;
++
++use Illuminate\Foundation\Http\FormRequest;
++use Illuminate\Validation\Rule;
++
++class StoreProductRequest extends FormRequest
++{
++    /**
++     * Determine if the user is authorized to make this request.
++     *
++     * Route group already enforces auth + role:admin, so authorization is
++     * granted at this layer.
++     */
++    public function authorize(): bool
++    {
++        return true;
++    }
++
++    /**
++     * @return array<string, array<int, mixed>>
++     */
++    public function rules(): array
++    {
++        $ignoreId = $this->route('id');
++
++        return [
++            'title' => ['required', 'string', 'max:200'],
++            'slug' => [
++                'required',
++                'string',
++                'max:200',
++                'regex:/^[a-z0-9-]+$/',
++                Rule::unique('products', 'slug')->ignore($ignoreId),
++            ],
++            'description' => ['required', 'string'],
++            'price' => ['required', 'numeric', 'min:0'],
++            'type' => ['required', 'in:course,software,mixed'],
++            'commission_rate' => ['required', 'numeric', 'min:0', 'max:100'],
++            'preview_youtube_id' => ['nullable', 'string', 'max:50'],
++            'status' => ['required', 'in:active,draft'],
++            'thumbnail' => ['nullable', 'image', 'mimes:jpeg,png,webp', 'max:2048'],
++        ];
++    }
++
++    /**
++     * @return array<string, string>
++     */
++    public function messages(): array
++    {
++        return [
++            'slug.regex' => 'Slug hanya boleh berisi huruf kecil, angka, dan tanda hubung.',
++            'thumbnail.image' => 'Thumbnail harus berupa gambar.',
++            'thumbnail.mimes' => 'Thumbnail harus jpeg, png, atau webp.',
++            'thumbnail.max' => 'Thumbnail maksimal 2 MB.',
++            'commission_rate.max' => 'Komisi maksimal 100%.',
++        ];
++    }
++}
+diff --git a/app/Http/Requests/StoreWithdrawalRequest.php b/app/Http/Requests/StoreWithdrawalRequest.php
+new file mode 100644
+index 0000000..896c4a2
+--- /dev/null
++++ b/app/Http/Requests/StoreWithdrawalRequest.php
+@@ -0,0 +1,39 @@
++<?php
++
++namespace App\Http\Requests;
++
++use Illuminate\Foundation\Http\FormRequest;
++
++class StoreWithdrawalRequest extends FormRequest
++{
++    public function authorize(): bool
++    {
++        return $this->user() !== null;
++    }
++
++    /**
++     * @return array<string, array<int, mixed>>
++     */
++    public function rules(): array
++    {
++        $balance = (float) ($this->user()->balance ?? 0);
++
++        return [
++            'amount' => ['required', 'numeric', 'min:50000', 'max:'.$balance],
++            'bank_name' => ['required', 'string', 'max:100'],
++            'account_number' => ['required', 'string', 'max:50'],
++            'account_name' => ['required', 'string', 'max:100'],
++        ];
++    }
++
++    /**
++     * @return array<string, string>
++     */
++    public function messages(): array
++    {
++        return [
++            'amount.min' => 'Jumlah pencairan minimal Rp 50.000.',
++            'amount.max' => 'Jumlah pencairan tidak boleh melebihi saldo Anda.',
++        ];
++    }
++}
+diff --git a/database/seeders/AdminSeeder.php b/database/seeders/AdminSeeder.php
+new file mode 100644
+index 0000000..e762fd6
+--- /dev/null
++++ b/database/seeders/AdminSeeder.php
+@@ -0,0 +1,34 @@
++<?php
++
++namespace Database\Seeders;
++
++use App\Models\User;
++use Illuminate\Database\Seeder;
++use Illuminate\Support\Facades\Hash;
++
++/**
++ * AdminSeeder
++ *
++ * Membuat satu akun admin awal untuk login pertama kali ke /admin.
++ *
++ * PENTING: Setelah login, segera ubah password via /profile.
++ *
++ * Cara jalankan (di server production):
++ *   php artisan db:seed --class=AdminSeeder
++ */
++class AdminSeeder extends Seeder
++{
++    public function run(): void
++    {
++        User::updateOrCreate(
++            ['email' => 'admin@kelasdigital.co.id'],
++            [
++                'name' => 'Admin KelasDigital',
++                'password' => Hash::make('GantiPasswordIni123!'),
++                'role' => 'admin',
++                'email_verified_at' => now(),
++                'balance' => 0,
++            ],
++        );
++    }
++}
+diff --git a/phpunit.xml b/phpunit.xml
+index 506b9a3..61c031c 100644
+--- a/phpunit.xml
++++ b/phpunit.xml
+@@ -22,8 +22,8 @@
+         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
+         <env name="BCRYPT_ROUNDS" value="4"/>
+         <env name="CACHE_STORE" value="array"/>
+-        <!-- <env name="DB_CONNECTION" value="sqlite"/> -->
+-        <!-- <env name="DB_DATABASE" value=":memory:"/> -->
++        <env name="DB_CONNECTION" value="sqlite"/>
++        <env name="DB_DATABASE" value=":memory:"/>
+         <env name="MAIL_MAILER" value="array"/>
+         <env name="PULSE_ENABLED" value="false"/>
+         <env name="QUEUE_CONNECTION" value="sync"/>
+diff --git a/public/.htaccess b/public/.htaccess
+index b574a59..84d19b7 100644
+--- a/public/.htaccess
++++ b/public/.htaccess
+@@ -5,6 +5,10 @@
+ 
+     RewriteEngine On
+ 
++    # Force HTTPS (aktifkan di production setelah SSL terpasang).
++    # RewriteCond %{HTTPS} off
++    # RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
++
+     # Handle Authorization Header
+     RewriteCond %{HTTP:Authorization} .
+     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+@@ -23,3 +27,41 @@
+     RewriteCond %{REQUEST_FILENAME} !-f
+     RewriteRule ^ index.php [L]
+ </IfModule>
++
++# Disable access ke file dotfile sensitif.
++<FilesMatch "^\.">
++    Require all denied
++</FilesMatch>
++
++<Files ".env">
++    Require all denied
++</Files>
++
++<Files "composer.json">
++    Require all denied
++</Files>
++
++<Files "composer.lock">
++    Require all denied
++</Files>
++
++<Files "package.json">
++    Require all denied
++</Files>
++
++# Cache static assets (gambar, css, js) selama 1 bulan.
++<IfModule mod_expires.c>
++    ExpiresActive On
++    ExpiresByType image/jpeg "access plus 1 month"
++    ExpiresByType image/png "access plus 1 month"
++    ExpiresByType image/webp "access plus 1 month"
++    ExpiresByType image/svg+xml "access plus 1 month"
++    ExpiresByType text/css "access plus 1 month"
++    ExpiresByType application/javascript "access plus 1 month"
++    ExpiresByType font/woff2 "access plus 1 year"
++</IfModule>
++
++# Gzip compression.
++<IfModule mod_deflate.c>
++    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/json application/xml image/svg+xml
++</IfModule>
+diff --git a/public/index.shared.php b/public/index.shared.php
+new file mode 100644
+index 0000000..0e8d50a
+--- /dev/null
++++ b/public/index.shared.php
+@@ -0,0 +1,75 @@
++<?php
++
++/*
++|--------------------------------------------------------------------------
++| index.shared.php — Front Controller untuk Shared Hosting (cPanel)
++|--------------------------------------------------------------------------
++|
++| File ini adalah pengganti `public/index.php` standar Laravel ketika
++| aplikasi di-deploy ke shared hosting cPanel. Pada layout shared hosting:
++|
++|   /home/<cpanel-user>/
++|     ├─ laravel/                       ← seluruh source Laravel
++|     │   ├─ app/
++|     │   ├─ bootstrap/
++|     │   ├─ config/
++|     │   ├─ database/
++|     │   ├─ resources/
++|     │   ├─ routes/
++|     │   ├─ storage/
++|     │   ├─ vendor/
++|     │   └─ .env
++|     └─ public_html/                   ← document root
++|         ├─ index.php                  ← copy dari file ini, lalu rename
++|         ├─ .htaccess                  ← copy dari public/.htaccess
++|         ├─ favicon.ico
++|         ├─ robots.txt
++|         └─ storage/                   ← symlink ke ../laravel/storage/app/public
++|                                          (dibuat via `php artisan storage:link`
++|                                          atau symlink manual via cPanel)
++|
++| LANGKAH DEPLOY SINGKAT (lihat DEPLOY.md untuk panduan lengkap):
++|
++|   1. Upload seluruh folder Laravel ke `/home/<cpanel-user>/laravel/`.
++|   2. Pindahkan isi `public/` ke `public_html/`.
++|   3. Rename `public_html/index.shared.php` menjadi `public_html/index.php`
++|      (replace file index.php standar yang ikut tercopy).
++|   4. Sesuaikan konstanta `LARAVEL_PATH` di bawah jika nama folder berbeda
++|      (default: `__DIR__.'/../laravel'`).
++|   5. Buat symlink storage:
++|        ln -s ../laravel/storage/app/public public_html/storage
++|   6. Set permission `laravel/storage` dan `laravel/bootstrap/cache` 775.
++|   7. Edit `laravel/.env` (APP_URL, DB_*, MAIL_*, dll).
++|   8. Jalankan via SSH (atau cPanel Terminal):
++|        cd ~/laravel
++|        php artisan migrate --force
++|        php artisan db:seed --class=AdminSeeder
++|        php artisan config:cache
++|        php artisan route:cache
++|        php artisan view:cache
++|
++*/
++
++use Illuminate\Http\Request;
++
++define('LARAVEL_START', microtime(true));
++
++/**
++ * Path absolut ke folder Laravel di luar public_html.
++ *
++ * GANTI nilai ini jika folder Laravel kamu tidak bernama `laravel`
++ * (misal `kelasdigital` atau `app`).
++ */
++$laravelPath = __DIR__.'/../laravel';
++
++// Maintenance mode (file digenerate oleh `php artisan down`).
++if (file_exists($maintenance = $laravelPath.'/storage/framework/maintenance.php')) {
++    require $maintenance;
++}
++
++// Composer autoloader.
++require $laravelPath.'/vendor/autoload.php';
++
++// Bootstrap Laravel & handle request.
++(require_once $laravelPath.'/bootstrap/app.php')
++    ->handleRequest(Request::capture());
+diff --git a/routes/web.php b/routes/web.php
+index 024615e..c6bd9e2 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -74,6 +74,7 @@
+         ->whereNumber('lesson_id')
+         ->name('lesson.complete');
+     Route::get('/download/{lesson_id}', [DownloadController::class, 'download'])
++        ->middleware('product.access')
+         ->whereNumber('lesson_id')
+         ->name('lesson.download');
+ 
+diff --git a/tests/Feature/ExampleTest.php b/tests/Feature/ExampleTest.php
+index 8364a84..22ef0c5 100644
+--- a/tests/Feature/ExampleTest.php
++++ b/tests/Feature/ExampleTest.php
+@@ -2,11 +2,13 @@
+ 
+ namespace Tests\Feature;
+ 
+-// use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Foundation\Testing\RefreshDatabase;
+ use Tests\TestCase;
+ 
+ class ExampleTest extends TestCase
+ {
++    use RefreshDatabase;
++
+     /**
+      * A basic test example.
+      */
+diff --git a/tests/Feature/Step15FlowsTest.php b/tests/Feature/Step15FlowsTest.php
+new file mode 100644
+index 0000000..8f334f4
+--- /dev/null
++++ b/tests/Feature/Step15FlowsTest.php
+@@ -0,0 +1,450 @@
++<?php
++
++namespace Tests\Feature;
++
++use App\Mail\CommissionEarnedMail;
++use App\Mail\CourseCompletedMail;
++use App\Mail\OrderConfirmedMail;
++use App\Mail\WithdrawalProcessedMail;
++use App\Models\LessonProgress;
++use App\Models\Order;
++use App\Models\Product;
++use App\Models\ProductLesson;
++use App\Models\ProductSection;
++use App\Models\Setting;
++use App\Models\User;
++use App\Models\UserProduct;
++use App\Models\Withdrawal;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Http\UploadedFile;
++use Illuminate\Support\Facades\Hash;
++use Illuminate\Support\Facades\Mail;
++use Illuminate\Support\Facades\Storage;
++use Tests\TestCase;
++
++/**
++ * End-to-end coverage untuk 10 skenario Step 15.
++ *
++ * Setiap test sengaja dibuat self-contained agar mudah dibaca dan
++ * dijalankan satuan via:
++ *   php artisan test --filter Step15FlowsTest::scenario_X_*
++ */
++class Step15FlowsTest extends TestCase
++{
++    use RefreshDatabase;
++
++    private function ensurePaymentSettings(): void
++    {
++        Setting::set('payment_method', 'manual');
++        Setting::set('bank_name', 'BCA');
++        Setting::set('bank_account_number', '1234567890');
++        Setting::set('bank_account_name', 'KelasDigital');
++        Setting::set('whatsapp_number', '6281234567890');
++        Setting::set('whatsapp_message_template', 'Halo Admin, saya transfer untuk {product} sebesar {amount}. Nama: {name}.');
++    }
++
++    private function makeProduct(array $attrs = []): Product
++    {
++        return Product::create(array_merge([
++            'title' => 'Kelas Test',
++            'slug' => 'kelas-test',
++            'description' => 'Deskripsi kelas test.',
++            'price' => 100000,
++            'thumbnail' => null,
++            'type' => 'course',
++            'status' => 'active',
++            'commission_rate' => 20,
++            'preview_youtube_id' => null,
++        ], $attrs));
++    }
++
++    private function makeMember(array $attrs = []): User
++    {
++        return User::create(array_merge([
++            'name' => 'Member',
++            'email' => 'member-'.uniqid().'@example.test',
++            'password' => Hash::make('password'),
++            'role' => 'member',
++            'balance' => 0,
++            'email_verified_at' => now(),
++        ], $attrs));
++    }
++
++    private function makeAdmin(): User
++    {
++        return User::create([
++            'name' => 'Admin',
++            'email' => 'admin-'.uniqid().'@example.test',
++            'password' => Hash::make('password'),
++            'role' => 'admin',
++            'balance' => 0,
++            'email_verified_at' => now(),
++        ]);
++    }
++
++    /**
++     * Berikan kepemilikan produk ke user via Order paid sintetis.
++     */
++    private function grantOwnership(User $user, Product $product): UserProduct
++    {
++        $order = Order::create([
++            'user_id' => $user->id,
++            'product_id' => $product->id,
++            'amount' => $product->price,
++            'status' => 'paid',
++            'payment_method' => 'manual',
++            'manual_status' => 'confirmed',
++            'paid_at' => now(),
++            'midtrans_order_id' => 'SEED-'.uniqid(),
++        ]);
++
++        return UserProduct::create([
++            'user_id' => $user->id,
++            'product_id' => $product->id,
++            'order_id' => $order->id,
++        ]);
++    }
++
++    /**
++     * Skenario 1: Register member baru → login → dashboard.
++     */
++    public function test_scenario_1_register_login_dashboard(): void
++    {
++        $response = $this->post('/register', [
++            'name' => 'Budi',
++            'email' => 'budi@example.test',
++            'password' => 'password123',
++            'password_confirmation' => 'password123',
++        ]);
++
++        $response->assertRedirect('/dashboard');
++        $this->assertAuthenticated();
++
++        $user = User::where('email', 'budi@example.test')->first();
++        $this->assertNotNull($user);
++        $this->assertSame('member', $user->role);
++
++        $this->get('/dashboard')->assertOk();
++    }
++
++    /**
++     * Skenario 2: Beli produk via manual transfer → admin konfirmasi
++     * → produk muncul di Produk Saya + email order-confirmed di-queue.
++     */
++    public function test_scenario_2_manual_purchase_and_admin_confirm(): void
++    {
++        Mail::fake();
++        $this->ensurePaymentSettings();
++
++        $product = $this->makeProduct();
++        $member = $this->makeMember();
++        $admin = $this->makeAdmin();
++
++        $this->actingAs($member)->post('/checkout/'.$product->slug);
++
++        $order = Order::where('user_id', $member->id)->where('product_id', $product->id)->firstOrFail();
++        $this->assertSame('pending', $order->status);
++        $this->assertSame('manual', $order->payment_method);
++        $this->assertSame('waiting', $order->manual_status);
++
++        $this->actingAs($admin)->post('/admin/pesanan/'.$order->id.'/konfirmasi')
++            ->assertRedirect();
++
++        $order->refresh();
++        $this->assertSame('paid', $order->status);
++        $this->assertSame('confirmed', $order->manual_status);
++
++        $this->assertDatabaseHas('user_products', [
++            'user_id' => $member->id,
++            'product_id' => $product->id,
++        ]);
++
++        $this->actingAs($member)->get('/produk-saya')
++            ->assertOk()
++            ->assertSee($product->title);
++
++        Mail::assertQueued(OrderConfirmedMail::class, fn ($m) => $m->hasTo($member->email));
++    }
++
++    /**
++     * Skenario 3: Akses materi → tandai semua lesson selesai → email
++     * course-completed di-queue + sertifikat dapat di-generate.
++     */
++    public function test_scenario_3_complete_all_lessons_and_certificate(): void
++    {
++        Mail::fake();
++
++        $product = $this->makeProduct();
++        $section = ProductSection::create(['product_id' => $product->id, 'title' => 'Bab 1', 'order_index' => 1]);
++        $l1 = ProductLesson::create(['section_id' => $section->id, 'title' => 'Lesson 1', 'type' => 'video', 'order_index' => 1, 'youtube_id' => 'abc']);
++        $l2 = ProductLesson::create(['section_id' => $section->id, 'title' => 'Lesson 2', 'type' => 'text', 'order_index' => 2, 'content' => 'isi']);
++
++        $member = $this->makeMember();
++        $this->grantOwnership($member, $product);
++
++        $this->actingAs($member)->get('/belajar/'.$product->slug)->assertOk();
++        $this->actingAs($member)->get('/belajar/'.$product->slug.'/'.$l1->id)->assertOk();
++
++        $this->actingAs($member)->post('/progress/'.$l1->id)->assertRedirect();
++        $this->actingAs($member)->post('/progress/'.$l2->id)->assertRedirect();
++
++        $this->assertSame(2, LessonProgress::where('user_id', $member->id)->whereNotNull('completed_at')->count());
++
++        Mail::assertQueued(CourseCompletedMail::class);
++
++        $this->actingAs($member)
++            ->get('/sertifikat/'.$product->id)
++            ->assertOk();
++    }
++
++    /**
++     * Skenario 4: Link afiliasi valid (referrer sudah beli) → session tersimpan.
++     * Link afiliasi invalid (referrer belum beli) → session TIDAK tersimpan.
++     */
++    public function test_scenario_4_affiliate_link_validity(): void
++    {
++        $product = $this->makeProduct();
++        $owner = $this->makeMember();
++        $stranger = $this->makeMember();
++
++        $this->grantOwnership($owner, $product);
++
++        // Referrer valid (sudah beli) → session tersimpan.
++        $this->get('/ref/'.$owner->id.'/'.$product->id)
++            ->assertRedirect('/produk/'.$product->slug);
++        $this->assertSame($owner->id, session('referral.product_'.$product->id));
++
++        // Reset session.
++        $this->flushSession();
++
++        // Referrer invalid (belum beli) → session TIDAK tersimpan.
++        $this->get('/ref/'.$stranger->id.'/'.$product->id)
++            ->assertRedirect('/produk/'.$product->slug);
++        $this->assertNull(session('referral.product_'.$product->id));
++    }
++
++    /**
++     * Skenario 5: Member B beli via link Member A → komisi level 1 ke A.
++     */
++    public function test_scenario_5_level1_commission(): void
++    {
++        Mail::fake();
++        $this->ensurePaymentSettings();
++
++        $product = $this->makeProduct(['price' => 100000, 'commission_rate' => 20]);
++        $a = $this->makeMember(['name' => 'Member A']);
++        $this->grantOwnership($a, $product);
++
++        $b = $this->makeMember(['name' => 'Member B']);
++        $admin = $this->makeAdmin();
++
++        // B klik link affiliasi A.
++        $this->actingAs($b)->get('/ref/'.$a->id.'/'.$product->id);
++
++        // B checkout produk (manual).
++        $this->actingAs($b)->post('/checkout/'.$product->slug);
++        $order = Order::where('user_id', $b->id)->firstOrFail();
++        $this->assertSame($a->id, $order->referred_by);
++
++        // Admin konfirmasi.
++        $this->actingAs($admin)->post('/admin/pesanan/'.$order->id.'/konfirmasi');
++
++        // 20% × 100000 = 20000.
++        $this->assertDatabaseHas('commissions', [
++            'order_id' => $order->id,
++            'earner_id' => $a->id,
++            'level' => 1,
++            'amount' => '20000.00',
++        ]);
++
++        $a->refresh();
++        $this->assertSame('20000.00', (string) $a->balance);
++
++        Mail::assertQueued(CommissionEarnedMail::class, fn ($m) => $m->hasTo($a->email));
++    }
++
++    /**
++     * Skenario 6: C beli via link B; B referrer-nya A → komisi masuk ke B
++     * (level 1) DAN ke A (level 2 / grandparent).
++     */
++    public function test_scenario_6_level2_commission_cascade(): void
++    {
++        Mail::fake();
++        $this->ensurePaymentSettings();
++
++        $product = $this->makeProduct(['price' => 100000, 'commission_rate' => 20]);
++
++        $a = $this->makeMember(['name' => 'Member A']);
++        $this->grantOwnership($a, $product);
++
++        $b = $this->makeMember(['name' => 'Member B', 'referrer_id' => $a->id]);
++        $this->grantOwnership($b, $product);
++
++        $c = $this->makeMember(['name' => 'Member C']);
++        $admin = $this->makeAdmin();
++
++        // C klik link affiliasi B, lalu beli.
++        $this->actingAs($c)->get('/ref/'.$b->id.'/'.$product->id);
++        $this->actingAs($c)->post('/checkout/'.$product->slug);
++        $order = Order::where('user_id', $c->id)->firstOrFail();
++        $this->assertSame($b->id, $order->referred_by);
++
++        $this->actingAs($admin)->post('/admin/pesanan/'.$order->id.'/konfirmasi');
++
++        // Level 1 ke B (20000).
++        $this->assertDatabaseHas('commissions', [
++            'order_id' => $order->id,
++            'earner_id' => $b->id,
++            'level' => 1,
++            'amount' => '20000.00',
++        ]);
++
++        // Level 2 ke A (20000 — sama besar level 1 sesuai service).
++        $this->assertDatabaseHas('commissions', [
++            'order_id' => $order->id,
++            'earner_id' => $a->id,
++            'level' => 2,
++            'amount' => '20000.00',
++        ]);
++
++        $a->refresh();
++        $b->refresh();
++        $this->assertSame('20000.00', (string) $a->balance);
++        $this->assertSame('20000.00', (string) $b->balance);
++    }
++
++    /**
++     * Skenario 7: Member ajukan pencairan → admin approve → balance berkurang.
++     */
++    public function test_scenario_7_withdrawal_request_and_approve(): void
++    {
++        Mail::fake();
++
++        $member = $this->makeMember(['balance' => 100000]);
++        $admin = $this->makeAdmin();
++
++        $this->actingAs($member)->post('/saldo/ajukan', [
++            'amount' => 75000,
++            'bank_name' => 'BCA',
++            'account_number' => '1112223334',
++            'account_name' => 'Budi',
++        ])->assertRedirect();
++
++        $w = Withdrawal::where('user_id', $member->id)->firstOrFail();
++        $this->assertSame('pending', $w->status);
++
++        // Validasi minimal Rp 50.000.
++        $this->actingAs($member)->post('/saldo/ajukan', [
++            'amount' => 1000,
++            'bank_name' => 'BCA',
++            'account_number' => '1',
++            'account_name' => 'Budi',
++        ])->assertSessionHasErrors('amount');
++
++        // Validasi tidak melebihi balance.
++        $this->actingAs($member)->post('/saldo/ajukan', [
++            'amount' => 999999999,
++            'bank_name' => 'BCA',
++            'account_number' => '1',
++            'account_name' => 'Budi',
++        ])->assertSessionHasErrors('amount');
++
++        $this->actingAs($admin)->post('/admin/pencairan/'.$w->id, [
++            'action' => 'approve',
++            'admin_note' => 'OK',
++        ])->assertRedirect();
++
++        $member->refresh();
++        $w->refresh();
++        $this->assertSame('approved', $w->status);
++        $this->assertSame('25000.00', (string) $member->balance);
++
++        Mail::assertQueued(WithdrawalProcessedMail::class, fn ($m) => $m->hasTo($member->email));
++    }
++
++    /**
++     * Skenario 8: Akses /belajar tanpa beli → redirect ke halaman produk
++     * dengan flash error.
++     */
++    public function test_scenario_8_belajar_without_purchase_redirects(): void
++    {
++        $product = $this->makeProduct();
++        $member = $this->makeMember();
++
++        $this->actingAs($member)->get('/belajar/'.$product->slug)
++            ->assertRedirect('/produk/'.$product->slug);
++    }
++
++    /**
++     * Skenario 9: Akses /admin sebagai member → 403 (CheckRole middleware).
++     */
++    public function test_scenario_9_member_cannot_access_admin(): void
++    {
++        $member = $this->makeMember();
++
++        $this->actingAs($member)->get('/admin')->assertForbidden();
++        $this->actingAs($member)->get('/admin/produk')->assertForbidden();
++        $this->actingAs($member)->get('/admin/laporan')->assertForbidden();
++    }
++
++    /**
++     * Skenario 10: Buat produk baru di admin → upload thumbnail → aktifkan
++     * → produk muncul di /produk publik.
++     */
++    public function test_scenario_10_admin_create_product_with_thumbnail(): void
++    {
++        Storage::fake('public');
++
++        $admin = $this->makeAdmin();
++
++        $payload = [
++            'title' => 'Kelas Baru',
++            'slug' => 'kelas-baru',
++            'description' => 'Belajar coding dari nol.',
++            'price' => 250000,
++            'type' => 'course',
++            'commission_rate' => 25,
++            'status' => 'active',
++            'thumbnail' => UploadedFile::fake()->image('thumb.png', 800, 600),
++        ];
++
++        $this->actingAs($admin)->post('/admin/produk', $payload)
++            ->assertRedirectContains('/admin/produk/');
++
++        $this->assertDatabaseHas('products', [
++            'slug' => 'kelas-baru',
++            'status' => 'active',
++        ]);
++
++        $product = Product::where('slug', 'kelas-baru')->firstOrFail();
++        $this->assertNotNull($product->thumbnail);
++        Storage::disk('public')->assertExists($product->thumbnail);
++
++        $this->get('/produk')
++            ->assertOk()
++            ->assertSee('Kelas Baru');
++
++        $this->get('/produk/kelas-baru')
++            ->assertOk()
++            ->assertSee('Kelas Baru');
++    }
++
++    /**
++     * Skenario 10b: Validasi thumbnail tipe dan ukuran via StoreProductRequest.
++     */
++    public function test_scenario_10b_thumbnail_validation_rejects_pdf(): void
++    {
++        $admin = $this->makeAdmin();
++
++        $this->actingAs($admin)->post('/admin/produk', [
++            'title' => 'X',
++            'slug' => 'kelas-x',
++            'description' => 'desc',
++            'price' => 100,
++            'type' => 'course',
++            'commission_rate' => 10,
++            'status' => 'draft',
++            'thumbnail' => UploadedFile::fake()->create('doc.pdf', 100, 'application/pdf'),
++        ])->assertSessionHasErrors('thumbnail');
++    }
++}
+-- 
+2.34.1
+

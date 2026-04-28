@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\ProductLesson;
 use App\Models\ProductSection;
+use App\Models\Setting;
 use App\Models\User;
 use App\Models\UserProduct;
 use Illuminate\Database\Seeder;
@@ -19,6 +20,18 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        // 0) Default settings
+        Setting::set('payment_method', 'manual');
+        Setting::set('bank_name', 'BCA');
+        Setting::set('bank_account_number', '1234567890');
+        Setting::set('bank_account_name', 'KelasDigital');
+        Setting::set('whatsapp_number', '6281234567890');
+        Setting::set('whatsapp_message_template',
+            'Halo Admin, saya sudah transfer pembayaran untuk produk *{product}* senilai *{amount}*. Nama: {name}. Mohon dikonfirmasi. Terima kasih.');
+        Setting::set('midtrans_server_key', '');
+        Setting::set('midtrans_client_key', '');
+        Setting::set('midtrans_is_production', '0');
+
         // 1) Admin user
         $admin = User::create([
             'name' => 'Admin KelasDigital',
@@ -123,6 +136,8 @@ class DatabaseSeeder extends Seeder
             'referred_by' => null,
             'amount' => $firstProduct->price,
             'status' => 'paid',
+            'payment_method' => 'manual',
+            'manual_status' => 'confirmed',
             'midtrans_order_id' => 'ORDER-SEED-'.Str::upper(Str::random(8)),
             'midtrans_token' => null,
             'paid_at' => now(),

@@ -56,6 +56,10 @@
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h2m4 0h4M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z"/></svg>
                     Pencairan
                 </a>
+                <a href="{{ route('admin.settings.index') }}" class="{{ $adminLink('admin.settings.*', '') }}">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317a1.724 1.724 0 013.35 0c.21.79 1.094 1.197 1.84.83a1.724 1.724 0 012.37 2.37c-.367.745.04 1.629.83 1.84a1.724 1.724 0 010 3.35c-.79.21-1.197 1.094-.83 1.84a1.724 1.724 0 01-2.37 2.37c-.745-.367-1.629.04-1.84.83a1.724 1.724 0 01-3.35 0c-.21-.79-1.094-1.197-1.84-.83a1.724 1.724 0 01-2.37-2.37c.367-.745-.04-1.629-.83-1.84a1.724 1.724 0 010-3.35c.79-.21 1.197-1.094.83-1.84a1.724 1.724 0 012.37-2.37c.745.367 1.629-.04 1.84-.83z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    Pengaturan
+                </a>
                 <form method="POST" action="{{ route('logout') }}" class="pt-4 mt-4 border-t border-gray-800">
                     @csrf
                     <button type="submit" class="w-full flex items-center gap-3 rounded-md px-3 py-2 text-gray-300 hover:bg-red-700 hover:text-white transition">

@@ -27,7 +27,7 @@ class CheckProductAccess
             abort(403);
         }
 
-        $product = $request->route('product');
+        $product = $request->route('product') ?? $request->route('slug');
 
         if ($product instanceof Product) {
             $productId = $product->id;

@@ -3,8 +3,12 @@
 use App\Http\Controllers\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\Admin\SettingController as AdminSettingController;
 use App\Http\Controllers\CheckoutController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DownloadController;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\LearningController;
 use App\Http\Controllers\MemberOrderController;
+use App\Http\Controllers\MemberProductController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ProfileController;
@@ -36,15 +40,27 @@ Route::post('/payment/notification', [PaymentController::class, 'notification'])
 */
 
 Route::middleware(['auth', 'verified'])->group(function () {
-    Route::get('/dashboard', function () {
-        return view('dashboard');
-    })->name('dashboard');
+    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
-    Route::get('/member/produk-saya', fn () => view('member.products'))->name('member.products');
+    Route::get('/produk-saya', [MemberProductController::class, 'index'])->name('member.products');
     Route::get('/member/afiliasi', fn () => view('member.affiliate'))->name('member.affiliate');
     Route::get('/member/saldo', fn () => view('member.balance'))->name('member.balance');
 
     Route::get('/pesanan-saya', [MemberOrderController::class, 'index'])->name('member.orders');
+
+    Route::get('/belajar/{slug}', [LearningController::class, 'show'])
+        ->middleware('product.access')
+        ->name('learning.show');
+    Route::get('/belajar/{slug}/{lesson_id}', [LearningController::class, 'lesson'])
+        ->middleware('product.access')
+        ->whereNumber('lesson_id')
+        ->name('learning.lesson');
+    Route::post('/progress/{lesson_id}', [LearningController::class, 'markComplete'])
+        ->whereNumber('lesson_id')
+        ->name('lesson.complete');
+    Route::get('/download/{lesson_id}', [DownloadController::class, 'download'])
+        ->whereNumber('lesson_id')
+        ->name('lesson.download');
 
     Route::get('/checkout/{slug}', [CheckoutController::class, 'show'])->name('checkout.show');
     Route::post('/checkout/{slug}', [CheckoutController::class, 'process'])->name('checkout.process');

@@ -14,8 +14,8 @@ class CommissionService
      * Level 1: direct referrer of the buyer (or order's referred_by).
      * Level 2: referrer of the level-1 earner (grandparent).
      *
-     * Commission amount per level uses the product's commission_rate. Level 2
-     * is half of level 1 to keep the program self-sustaining; tweak as needed.
+     * Commission amount for both levels uses the same product.commission_rate
+     * applied to the order amount.
      */
     public function calculate(Order $order): void
     {
@@ -46,7 +46,7 @@ class CommissionService
 
             $level1User = User::find($earnerId);
             if ($level1User && $level1User->referrer_id) {
-                $level2Amount = round($level1Amount / 2, 2);
+                $level2Amount = $level1Amount;
 
                 if ($level2Amount > 0) {
                     Commission::create([

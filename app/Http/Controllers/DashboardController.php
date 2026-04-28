@@ -21,6 +21,7 @@ class DashboardController extends Controller
         $ownedProductIds = UserProduct::where('user_id', $user->id)->pluck('product_id');
         $recent = Product::query()
             ->whereIn('id', $ownedProductIds)
+            ->with('sections.lessons:id,section_id')
             ->orderByDesc('id')
             ->take(3)
             ->get();
@@ -41,7 +42,7 @@ class DashboardController extends Controller
 
     private function productProgress(Product $product, int $userId): array
     {
-        $lessonIds = $product->sections()->with('lessons:id,section_id')->get()
+        $lessonIds = $product->sections
             ->flatMap(fn ($s) => $s->lessons->pluck('id'))
             ->all();
 

@@ -13,7 +13,7 @@ class CheckRole
      *
      * Usage in routes: `->middleware('role:admin')` or `->middleware('role:admin,member')`.
      *
-     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
+     * @param  Closure(Request): (Response)  $next
      */
     public function handle(Request $request, Closure $next, string ...$roles): Response
     {

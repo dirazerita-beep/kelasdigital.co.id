@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreProductRequest;
 use App\Models\Product;
 use App\Models\ProductLesson;
 use App\Models\ProductSection;
@@ -28,9 +29,9 @@ class ProductController extends Controller
         return view('admin.products.create');
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(StoreProductRequest $request): RedirectResponse
     {
-        $data = $this->validateProduct($request);
+        $data = $request->validated();
 
         $data['thumbnail'] = $this->handleThumbnail($request);
 
@@ -48,11 +49,11 @@ class ProductController extends Controller
         return view('admin.products.edit', ['product' => $product]);
     }
 
-    public function update(Request $request, int $id): RedirectResponse
+    public function update(StoreProductRequest $request, int $id): RedirectResponse
     {
         $product = Product::findOrFail($id);
 
-        $data = $this->validateProduct($request, $id);
+        $data = $request->validated();
 
         if ($request->hasFile('thumbnail')) {
             if ($product->thumbnail) {
@@ -81,24 +82,6 @@ class ProductController extends Controller
         return redirect()
             ->route('admin.products.index')
             ->with('status', 'Produk berhasil dihapus.');
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function validateProduct(Request $request, ?int $ignoreId = null): array
-    {
-        return $request->validate([
-            'title' => ['required', 'string', 'max:200'],
-            'slug' => ['required', 'string', 'max:200', 'regex:/^[a-z0-9-]+$/', 'unique:products,slug'.($ignoreId ? ','.$ignoreId : '')],
-            'description' => ['required', 'string'],
-            'price' => ['required', 'numeric', 'min:0'],
-            'type' => ['required', 'in:course,software,mixed'],
-            'commission_rate' => ['required', 'numeric', 'min:0', 'max:100'],
-            'preview_youtube_id' => ['nullable', 'string', 'max:50'],
-            'status' => ['required', 'in:active,draft'],
-            'thumbnail' => ['nullable', 'image', 'mimes:jpeg,png,webp', 'max:2048'],
-        ]);
     }
 
     private function handleThumbnail(Request $request): ?string

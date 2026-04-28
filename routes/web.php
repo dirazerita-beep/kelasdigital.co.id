@@ -74,6 +74,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->whereNumber('lesson_id')
         ->name('lesson.complete');
     Route::get('/download/{lesson_id}', [DownloadController::class, 'download'])
+        ->middleware('product.access')
         ->whereNumber('lesson_id')
         ->name('lesson.download');
 

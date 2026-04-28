@@ -2,12 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\CourseCompletedMail;
 use App\Models\LessonProgress;
 use App\Models\Product;
 use App\Models\ProductLesson;
+use App\Models\UserProduct;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 class LearningController extends Controller
 {
@@ -87,7 +90,7 @@ class LearningController extends Controller
         $lesson = ProductLesson::with('section.product')->findOrFail($lessonId);
         $product = $lesson->section->product;
 
-        $owns = \App\Models\UserProduct::where('user_id', $user->id)
+        $owns = UserProduct::where('user_id', $user->id)
             ->where('product_id', $product->id)
             ->exists();
         abort_unless($owns, 403);
@@ -109,6 +112,16 @@ class LearningController extends Controller
                 'product_id' => $product->id,
                 'product' => $product->title,
             ]);
+
+            $alreadyNotified = LessonProgress::where('user_id', $user->id)
+                ->whereIn('lesson_id', $allLessonIds)
+                ->whereNotNull('completed_at')
+                ->where('completed_at', '<', now()->subSeconds(2))
+                ->count();
+
+            if ($alreadyNotified < count($allLessonIds) && $user->email) {
+                Mail::to($user->email)->queue(new CourseCompletedMail($user, $product));
+            }
         }
 
         return redirect()

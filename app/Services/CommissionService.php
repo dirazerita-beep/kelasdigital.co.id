@@ -2,10 +2,12 @@
 
 namespace App\Services;
 
+use App\Mail\CommissionEarnedMail;
 use App\Models\Commission;
 use App\Models\Order;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 
 class CommissionService
 {
@@ -33,14 +35,18 @@ class CommissionService
 
         $level1Amount = round(((float) $order->amount) * ($rate / 100), 2);
 
-        DB::transaction(function () use ($order, $earnerId, $rate, $level1Amount) {
-            Commission::create([
+        /** @var array<int, int> $newCommissionIds */
+        $newCommissionIds = [];
+
+        DB::transaction(function () use ($order, $earnerId, $level1Amount, &$newCommissionIds) {
+            $c1 = Commission::create([
                 'order_id' => $order->id,
                 'earner_id' => $earnerId,
                 'amount' => $level1Amount,
                 'level' => 1,
                 'status' => 'pending',
             ]);
+            $newCommissionIds[] = $c1->id;
 
             User::where('id', $earnerId)->increment('balance', $level1Amount);
 
@@ -49,17 +55,25 @@ class CommissionService
                 $level2Amount = $level1Amount;
 
                 if ($level2Amount > 0) {
-                    Commission::create([
+                    $c2 = Commission::create([
                         'order_id' => $order->id,
                         'earner_id' => $level1User->referrer_id,
                         'amount' => $level2Amount,
                         'level' => 2,
                         'status' => 'pending',
                     ]);
+                    $newCommissionIds[] = $c2->id;
 
                     User::where('id', $level1User->referrer_id)->increment('balance', $level2Amount);
                 }
             }
         });
+
+        foreach ($newCommissionIds as $cid) {
+            $commission = Commission::with(['earner', 'order.product'])->find($cid);
+            if ($commission && $commission->earner?->email) {
+                Mail::to($commission->earner->email)->queue(new CommissionEarnedMail($commission));
+            }
+        }
     }
 }

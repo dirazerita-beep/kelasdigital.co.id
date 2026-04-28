@@ -1,7 +1,12 @@
 <?php
 
+use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
+use App\Http\Controllers\Admin\MemberController as AdminMemberController;
 use App\Http\Controllers\Admin\OrderController as AdminOrderController;
+use App\Http\Controllers\Admin\ProductController as AdminProductController;
+use App\Http\Controllers\Admin\ReportController as AdminReportController;
 use App\Http\Controllers\Admin\SettingController as AdminSettingController;
+use App\Http\Controllers\Admin\WithdrawalController as AdminWithdrawalController;
 use App\Http\Controllers\AffiliateController;
 use App\Http\Controllers\CertificateController;
 use App\Http\Controllers\CheckoutController;
@@ -95,18 +100,63 @@ Route::middleware(['auth', 'verified', 'role:admin'])
     ->prefix('admin')
     ->name('admin.')
     ->group(function () {
-        Route::get('/', fn () => view('admin.dashboard'))->name('dashboard');
-        Route::get('/produk', fn () => view('admin.products'))->name('products');
-        Route::get('/member', fn () => view('admin.members'))->name('members');
-        Route::get('/komisi', fn () => view('admin.commissions'))->name('commissions');
-        Route::get('/pencairan', fn () => view('admin.withdrawals'))->name('withdrawals');
+        Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
 
+        // Produk
+        Route::get('/produk', [AdminProductController::class, 'index'])->name('products');
+        Route::get('/produk/baru', [AdminProductController::class, 'create'])->name('products.create');
+        Route::post('/produk', [AdminProductController::class, 'store'])->name('products.store');
+        Route::get('/produk/{id}/edit', [AdminProductController::class, 'edit'])
+            ->whereNumber('id')->name('products.edit');
+        Route::put('/produk/{id}', [AdminProductController::class, 'update'])
+            ->whereNumber('id')->name('products.update');
+        Route::delete('/produk/{id}', [AdminProductController::class, 'destroy'])
+            ->whereNumber('id')->name('products.destroy');
+
+        // Section
+        Route::post('/produk/{id}/sections', [AdminProductController::class, 'storeSection'])
+            ->whereNumber('id')->name('products.sections.store');
+        Route::put('/produk/{id}/sections/{sectionId}', [AdminProductController::class, 'updateSection'])
+            ->whereNumber(['id', 'sectionId'])->name('products.sections.update');
+        Route::delete('/produk/{id}/sections/{sectionId}', [AdminProductController::class, 'destroySection'])
+            ->whereNumber(['id', 'sectionId'])->name('products.sections.destroy');
+        Route::post('/produk/{id}/sections/reorder', [AdminProductController::class, 'reorderSections'])
+            ->whereNumber('id')->name('products.sections.reorder');
+
+        // Lesson
+        Route::post('/produk/{id}/sections/{sectionId}/lessons', [AdminProductController::class, 'storeLesson'])
+            ->whereNumber(['id', 'sectionId'])->name('products.sections.lessons.store');
+        Route::put('/produk/{id}/sections/{sectionId}/lessons/{lessonId}', [AdminProductController::class, 'updateLesson'])
+            ->whereNumber(['id', 'sectionId', 'lessonId'])->name('products.sections.lessons.update');
+        Route::delete('/produk/{id}/sections/{sectionId}/lessons/{lessonId}', [AdminProductController::class, 'destroyLesson'])
+            ->whereNumber(['id', 'sectionId', 'lessonId'])->name('products.sections.lessons.destroy');
+        Route::post('/produk/{id}/sections/{sectionId}/lessons/reorder', [AdminProductController::class, 'reorderLessons'])
+            ->whereNumber(['id', 'sectionId'])->name('products.sections.lessons.reorder');
+
+        // Member
+        Route::get('/member', [AdminMemberController::class, 'index'])->name('members.index');
+        Route::get('/member/{id}', [AdminMemberController::class, 'show'])
+            ->whereNumber('id')->name('members.show');
+
+        // Komisi (placeholder kept for sidebar compatibility)
+        Route::get('/komisi', fn () => view('admin.commissions'))->name('commissions');
+
+        // Pencairan
+        Route::get('/pencairan', [AdminWithdrawalController::class, 'index'])->name('withdrawals.index');
+        Route::post('/pencairan/{id}', [AdminWithdrawalController::class, 'update'])
+            ->whereNumber('id')->name('withdrawals.update');
+
+        // Laporan
+        Route::get('/laporan', [AdminReportController::class, 'index'])->name('reports');
+
+        // Pesanan
         Route::get('/pesanan', [AdminOrderController::class, 'index'])->name('orders');
         Route::post('/pesanan/{id}/konfirmasi', [AdminOrderController::class, 'konfirmasi'])
             ->whereNumber('id')->name('orders.konfirmasi');
         Route::post('/pesanan/{id}/tolak', [AdminOrderController::class, 'tolak'])
             ->whereNumber('id')->name('orders.tolak');
 
+        // Pengaturan
         Route::get('/pengaturan', [AdminSettingController::class, 'index'])->name('settings.index');
         Route::post('/pengaturan', [AdminSettingController::class, 'update'])->name('settings.update');
     });

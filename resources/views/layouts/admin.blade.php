@@ -36,11 +36,11 @@
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l9-9 9 9M5 10v10h4v-6h6v6h4V10"/></svg>
                     Dashboard Admin
                 </a>
-                <a href="{{ route('admin.products') }}" class="{{ $adminLink('admin.products', '') }}">
+                <a href="{{ route('admin.products') }}" class="{{ $adminLink('admin.products*', '') }}">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0v10l-8 4m8-14L12 11m0 0L4 7m8 4v10"/></svg>
                     Kelola Produk
                 </a>
-                <a href="{{ route('admin.members') }}" class="{{ $adminLink('admin.members', '') }}">
+                <a href="{{ route('admin.members.index') }}" class="{{ $adminLink('admin.members.*', '') }}">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-5a4 4 0 11-8 0 4 4 0 018 0zm6 0a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
                     Kelola Member
                 </a>
@@ -52,9 +52,13 @@
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V6m0 12v-2m9-4a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     Komisi
                 </a>
-                <a href="{{ route('admin.withdrawals') }}" class="{{ $adminLink('admin.withdrawals', '') }}">
+                <a href="{{ route('admin.withdrawals.index') }}" class="{{ $adminLink('admin.withdrawals.*', '') }}">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h2m4 0h4M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z"/></svg>
                     Pencairan
+                </a>
+                <a href="{{ route('admin.reports') }}" class="{{ $adminLink('admin.reports', '') }}">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-6a2 2 0 012-2h2a2 2 0 012 2v6m4 0H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2z"/></svg>
+                    Laporan
                 </a>
                 <a href="{{ route('admin.settings.index') }}" class="{{ $adminLink('admin.settings.*', '') }}">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317a1.724 1.724 0 013.35 0c.21.79 1.094 1.197 1.84.83a1.724 1.724 0 012.37 2.37c-.367.745.04 1.629.83 1.84a1.724 1.724 0 010 3.35c-.79.21-1.197 1.094-.83 1.84a1.724 1.724 0 01-2.37 2.37c-.745-.367-1.629.04-1.84.83a1.724 1.724 0 01-3.35 0c-.21-.79-1.094-1.197-1.84-.83a1.724 1.724 0 01-2.37-2.37c.367-.745-.04-1.629-.83-1.84a1.724 1.724 0 010-3.35c.79-.21 1.197-1.094.83-1.84a1.724 1.724 0 012.37-2.37c.745.367 1.629-.04 1.84-.83z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>

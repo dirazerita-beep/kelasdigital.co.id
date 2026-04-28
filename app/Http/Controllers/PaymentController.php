@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\OrderConfirmedMail;
 use App\Models\Order;
 use App\Models\Setting;
 use App\Models\UserProduct;
@@ -9,6 +10,7 @@ use App\Services\CommissionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 
 class PaymentController extends Controller
 {
@@ -48,7 +50,12 @@ class PaymentController extends Controller
                         ['order_id' => $order->id]
                     );
                 });
-                $commissions->calculate($order->fresh(['product', 'user']));
+                $fresh = $order->fresh(['product', 'user']);
+                $commissions->calculate($fresh);
+
+                if ($fresh->user?->email) {
+                    Mail::to($fresh->user->email)->queue(new OrderConfirmedMail($fresh));
+                }
             }
         } elseif (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
             $order->update(['status' => $transactionStatus === 'expire' ? 'expired' : 'failed']);

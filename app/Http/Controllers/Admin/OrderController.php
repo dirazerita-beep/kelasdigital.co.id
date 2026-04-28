@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Mail\OrderConfirmedMail;
 use App\Models\Order;
 use App\Models\UserProduct;
 use App\Services\CommissionService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\View\View;
 
 class OrderController extends Controller
@@ -61,7 +63,12 @@ class OrderController extends Controller
             );
         });
 
-        $commissions->calculate($order->fresh(['product', 'user']));
+        $fresh = $order->fresh(['product', 'user']);
+        $commissions->calculate($fresh);
+
+        if ($fresh->user?->email) {
+            Mail::to($fresh->user->email)->queue(new OrderConfirmedMail($fresh));
+        }
 
         return back()->with('status', 'Pembayaran dikonfirmasi & akses produk diaktifkan.');
     }

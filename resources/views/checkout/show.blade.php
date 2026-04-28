@@ -10,9 +10,15 @@
         {{-- Order summary --}}
         <div class="mt-6 rounded-lg border border-gray-200 bg-white p-5">
             <div class="flex items-start gap-4">
-                <div class="flex h-20 w-32 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-blue-100 to-indigo-100 text-center text-blue-700 text-sm font-semibold px-2">
-                    {{ $product->title }}
-                </div>
+
+            @if($product->thumbnail)
+                <img src="{{ asset('storage/' . $product->thumbnail) }}"
+                 class="h-20 w-32 shrink-0 rounded-md object-cover">
+            @else
+                 <div class="flex h-20 w-32 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-blue-100 to-indigo-100 text-center text-blue-700 text-sm font-semibold px-2">
+                     {{ $product->title }}
+                 </div>
+            @endif
                 <div class="flex-1">
                     <h2 class="text-lg font-semibold text-gray-900">{{ $product->title }}</h2>
                     <p class="text-xs uppercase text-gray-500 tracking-wide">{{ $product->type === 'software' ? 'Software' : 'Kursus' }}</p>

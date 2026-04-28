@@ -21,7 +21,7 @@ class ProductController extends Controller
     {
         $products = Product::query()->latest()->paginate(20);
 
-        return view('admin.products', ['products' => $products]);
+        return view('admin.products.index', ['products' => $products]);
     }
 
     public function create(): View
